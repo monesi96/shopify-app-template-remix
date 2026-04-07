@@ -66,12 +66,8 @@ export default function ImagesPage() {
 
   const [scale, setScale] = useState("4");
   const [onlyLowRes, setOnlyLowRes] = useState(false);
-  const [onlyLowRes, setOnlyLowRes] = useState(false);
   const [upscaleResults, setUpscaleResults] = useState<any[]>([]);
 
-  const filteredProducts = onlyLowRes
-    ? products.filter((p: any) => p.needsUpscale)
-    : products;
   const filteredProducts = onlyLowRes
     ? products.filter((p: any) => p.needsUpscale)
     : products;
