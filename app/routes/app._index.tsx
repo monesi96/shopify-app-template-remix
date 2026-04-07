@@ -542,18 +542,27 @@ export default function Index() {
 
   const goToNextPage = () => {
     if (pageInfo.endCursor) {
-      navigate(`/app?cursor=${encodeURIComponent(pageInfo.endCursor)}&direction=next${onlyMissing ? "&missing=true" : ""}`);
+      const params = new URLSearchParams(searchParams);
+      params.set("cursor", pageInfo.endCursor);
+      params.set("direction", "next");
+      navigate(`/app?${params.toString()}`);
     }
   };
 
   const goToPrevPage = () => {
     if (pageInfo.startCursor) {
-      navigate(`/app?cursor=${encodeURIComponent(pageInfo.startCursor)}&direction=prev${onlyMissing ? "&missing=true" : ""}`);
+      const params = new URLSearchParams(searchParams);
+      params.set("cursor", pageInfo.startCursor);
+      params.set("direction", "prev");
+      navigate(`/app?${params.toString()}`);
     }
   };
 
   const goToFirstPage = () => {
-    navigate(`/app`);
+    const params = new URLSearchParams(searchParams);
+    params.delete("cursor");
+    params.delete("direction");
+    navigate(`/app?${params.toString()}`);
   };
 
   const toneOptions = [
@@ -765,7 +774,15 @@ export default function Index() {
                       checked={onlyMissing}
                       onChange={(checked) => {
                         setOnlyMissing(checked);
-                        navigate(checked ? "/app?missing=true" : "/app");
+                        const newParams = new URLSearchParams(searchParams);
+                        if (checked) {
+                          newParams.set("missing", "true");
+                        } else {
+                          newParams.delete("missing");
+                        }
+                        newParams.delete("cursor");
+                        newParams.delete("direction");
+                        navigate(`/app?${newParams.toString()}`);
                       }}
                     />
                   </InlineStack>
