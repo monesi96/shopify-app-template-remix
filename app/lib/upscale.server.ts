@@ -74,10 +74,8 @@ export async function loadProductsWithImages(admin: any, cursor: string | null, 
   const response = await admin.graphql(query, { variables });
   const responseJson = await response.json();
 
-  const countResp = await admin.graphql(`#graphql query { productsCount { count } }`);
-  const countJson = await countResp.json();
-  const totalProducts = countJson.data?.productsCount?.count || 0;
 
+  const totalProducts = responseJson.data.products.edges.length;
   const products = responseJson.data.products.edges.map((edge: any) => {
     const images = edge.node.media.edges
       .filter((m: any) => m.node.preview?.image?.url)
