@@ -2,7 +2,7 @@
   "name": "app",
   "private": true,
   "scripts": {
-    "build": "prisma generate "build": "remix vite:build""build": "remix vite:build" prisma migrate deploy "build": "remix vite:build""build": "remix vite:build" remix vite:build",
+    "build": "prisma generate && prisma migrate deploy && remix vite:build",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
