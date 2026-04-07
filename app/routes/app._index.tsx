@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, useFetcher } from "@remix-run/react";
+import { useLoaderData, useFetcher, useSearchParams, useNavigate } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -20,74 +20,117 @@ import {
   Thumbnail,
   EmptyState,
   Tabs,
-  RangeSlider,
   Checkbox,
   Divider,
-  ProgressBar,
-  Modal,
-  Collapsible,
-  Icon,
+  Pagination,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 
-// ── LOADER: Carica prodotti con più dati ─────────────────────
+const PRODUCTS_PER_PAGE = 100;
+
+// ── LOADER ───────────────────────────────────────────────────
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const cursor = url.searchParams.get("cursor");
+  const direction = url.searchParams.get("direction") || "next";
 
-  const response = await admin.graphql(
-    `#graphql
-    query getProducts {
-      products(first: 50) {
-        edges {
-          node {
-            id
-            title
-            handle
-            vendor
-            productType
-            tags
-            descriptionHtml
-            featuredMedia {
-              preview {
-                image {
-                  url
-                  altText
-                }
-              }
-            }
-            variants(first: 5) {
-              edges {
-                node {
-                  price
-                  barcode
-                  sku
-                  title
-                }
-              }
-            }
-            media(first: 5) {
-              edges {
-                node {
-                  mediaContentType
-                  preview {
-                    image {
-                      url
-                      altText
-                      width
-                      height
-                    }
-                  }
-                }
-              }
+  let query: string;
+
+  if (cursor && direction === "next") {
+    query = `#graphql
+      query getProducts($cursor: String!) {
+        products(first: ${PRODUCTS_PER_PAGE}, after: $cursor) {
+          edges {
+            cursor
+            node {
+              id
+              title
+              handle
+              vendor
+              productType
+              tags
+              descriptionHtml
+              featuredMedia { preview { image { url altText } } }
+              variants(first: 1) { edges { node { price barcode sku title } } }
+              media(first: 5) { edges { node { preview { image { url altText width height } } } } }
             }
           }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
         }
-      }
-    }`
-  );
+      }`;
+  } else if (cursor && direction === "prev") {
+    query = `#graphql
+      query getProducts($cursor: String!) {
+        products(last: ${PRODUCTS_PER_PAGE}, before: $cursor) {
+          edges {
+            cursor
+            node {
+              id
+              title
+              handle
+              vendor
+              productType
+              tags
+              descriptionHtml
+              featuredMedia { preview { image { url altText } } }
+              variants(first: 1) { edges { node { price barcode sku title } } }
+              media(first: 5) { edges { node { preview { image { url altText width height } } } } }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+        }
+      }`;
+  } else {
+    query = `#graphql
+      query getProducts {
+        products(first: ${PRODUCTS_PER_PAGE}) {
+          edges {
+            cursor
+            node {
+              id
+              title
+              handle
+              vendor
+              productType
+              tags
+              descriptionHtml
+              featuredMedia { preview { image { url altText } } }
+              variants(first: 1) { edges { node { price barcode sku title } } }
+              media(first: 5) { edges { node { preview { image { url altText width height } } } } }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+        }
+      }`;
+  }
 
+  const variables = cursor ? { cursor } : {};
+  const response = await admin.graphql(query, { variables });
   const responseJson = await response.json();
+
+  // Conta totale prodotti
+  const countResp = await admin.graphql(`#graphql
+    query { productsCount { count } }`);
+  const countJson = await countResp.json();
+  const totalProducts = countJson.data?.productsCount?.count || 0;
+
   const products = responseJson.data.products.edges.map((edge: any) => ({
     id: edge.node.id,
     numericId: edge.node.id.replace("gid://shopify/Product/", ""),
@@ -98,38 +141,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     tags: edge.node.tags || [],
     description: edge.node.descriptionHtml || "",
     image: edge.node.featuredMedia?.preview?.image?.url || "",
-    imageWidth: edge.node.featuredMedia?.preview?.image?.width || 0,
-    imageHeight: edge.node.featuredMedia?.preview?.image?.height || 0,
     price: edge.node.variants.edges[0]?.node?.price || "0.00",
     barcode: edge.node.variants.edges[0]?.node?.barcode || "",
     sku: edge.node.variants.edges[0]?.node?.sku || "",
-    variantTitle: edge.node.variants.edges[0]?.node?.title || "",
-    variants: edge.node.variants.edges.map((v: any) => ({
-      price: v.node.price,
-      barcode: v.node.barcode,
-      sku: v.node.sku,
-      title: v.node.title,
-    })),
     images: edge.node.media.edges
       .filter((m: any) => m.node.preview?.image?.url)
       .map((m: any) => ({
         url: m.node.preview.image.url,
         alt: m.node.preview.image.altText,
-        width: m.node.preview.image.width,
-        height: m.node.preview.image.height,
       })),
   }));
 
-  return json({ products });
+  const pageInfo = responseJson.data.products.pageInfo;
+
+  return json({
+    products,
+    pageInfo,
+    totalProducts,
+  });
 };
 
-// ── ACTION: Genera / Pusha / Ricerca EAN ─────────────────────
+// ── ACTION ───────────────────────────────────────────────────
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
 
-  // ── GENERA DESCRIZIONE CON CLAUDE ──
   if (intent === "generate") {
     const productsJSON = formData.get("products") as string;
     const tone = formData.get("tone") as string;
@@ -145,7 +182,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const results: any[] = [];
 
     for (const product of products) {
-      // Se useBarcode è attivo e c'è un barcode, cerca info online
       let barcodeInfo = "";
       if (useBarcode === "true" && product.barcode) {
         try {
@@ -172,13 +208,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
       }
 
-      // Costruisci info immagine
       let imageContext = "";
       if (useImage === "true" && product.image) {
         imageContext = `\n- Immagine prodotto disponibile: ${product.image}`;
-        if (product.images && product.images.length > 1) {
-          imageContext += `\n- Numero foto disponibili: ${product.images.length}`;
-        }
       }
 
       const prompt = buildPrompt(product, tone, framework, language, keywords, length, structure, barcodeInfo, imageContext);
@@ -186,7 +218,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       try {
         const messages: any[] = [];
 
-        // Se useImage è attivo, invia anche l'immagine a Claude
         if (useImage === "true" && product.image) {
           try {
             const imgResp = await fetch(product.image);
@@ -209,7 +240,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               ],
             });
           } catch (imgErr) {
-            // Fallback: solo testo
             messages.push({ role: "user", content: prompt });
           }
         } else {
@@ -233,7 +263,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const aiData = await aiResponse.json();
         let newDescription = aiData.content?.[0]?.text?.trim() || "";
 
-        // Pulisci backtick markdown se presenti
         newDescription = newDescription
           .replace(/^```html\s*/i, "")
           .replace(/^```\s*/i, "")
@@ -266,7 +295,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return json({ intent: "generate", results });
   }
 
-  // ── PUSHA DESCRIZIONE SU SHOPIFY ──
   if (intent === "push") {
     const productId = formData.get("productId") as string;
     const description = formData.get("description") as string;
@@ -275,13 +303,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     let finalDescription = description;
 
     if (mode === "append") {
-      // Recupera descrizione esistente
       const getResp = await admin.graphql(
         `#graphql
         query getProduct($id: ID!) {
-          product(id: $id) {
-            descriptionHtml
-          }
+          product(id: $id) { descriptionHtml }
         }`,
         { variables: { id: productId } }
       );
@@ -298,24 +323,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       `#graphql
       mutation updateProduct($input: ProductInput!) {
         productUpdate(input: $input) {
-          product {
-            id
-            descriptionHtml
-          }
-          userErrors {
-            field
-            message
-          }
+          product { id descriptionHtml }
+          userErrors { field message }
         }
       }`,
-      {
-        variables: {
-          input: {
-            id: productId,
-            descriptionHtml: finalDescription,
-          },
-        },
-      }
+      { variables: { input: { id: productId, descriptionHtml: finalDescription } } }
     );
 
     const responseJson = await response.json();
@@ -328,7 +340,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return json({ intent: "push", success: true, productId });
   }
 
-  // ── PUSH MULTIPLO ──
   if (intent === "pushAll") {
     const resultsJSON = formData.get("results") as string;
     const mode = formData.get("mode") as string || "replace";
@@ -345,9 +356,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const getResp = await admin.graphql(
           `#graphql
           query getProduct($id: ID!) {
-            product(id: $id) {
-              descriptionHtml
-            }
+            product(id: $id) { descriptionHtml }
           }`,
           { variables: { id: result.id } }
         );
@@ -388,82 +397,57 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return json({ error: "Intent non valido" });
 };
 
-// ── PROMPT BUILDER V2 ────────────────────────────────────────
-function buildPrompt(
-  product: any,
-  tone: string,
-  framework: string,
-  language: string,
-  keywords: string,
-  length: string,
-  structure: string,
-  barcodeInfo: string,
-  imageContext: string
-) {
+// ── PROMPT BUILDER ───────────────────────────────────────────
+function buildPrompt(product: any, tone: string, framework: string, language: string, keywords: string, length: string, structure: string, barcodeInfo: string, imageContext: string) {
   const toneMap: Record<string, string> = {
-    professional: "Professionale e autorevole — comunica competenza e affidabilità",
-    emotional: "Emozionale e coinvolgente — fai sentire il lettore parte di un'esperienza",
-    technical: "Tecnico e dettagliato — focus su specifiche, materiali, performance",
-    luxury: "Luxury ed esclusivo — linguaggio raffinato, evocativo, aspirazionale",
-    casual: "Casual e amichevole — come un amico che ti consiglia il prodotto",
-    ironic: "Ironico e originale — smart, con personalità, memorabile",
-    minimal: "Minimal e pulito — essenziale, ogni parola conta, zero fuffa",
+    professional: "Professionale e autorevole",
+    emotional: "Emozionale e coinvolgente",
+    technical: "Tecnico e dettagliato",
+    luxury: "Luxury, esclusivo e raffinato",
+    casual: "Casual e amichevole",
+    ironic: "Ironico e originale, smart, con personalità",
+    minimal: "Minimal e pulito, ogni parola conta",
   };
 
   const frameworkMap: Record<string, string> = {
-    aida: "AIDA: Apri con un hook che cattura l'ATTENZIONE → crea INTERESSE con dettagli unici → genera DESIDERIO con benefici emotivi → chiudi con AZIONE (CTA)",
-    pas: "PAS: Identifica un PROBLEMA del target → AGITA mostrando le conseguenze → presenta il prodotto come SOLUZIONE",
-    fab: "FAB: Descrivi la FEATURE tecnica → spiega il VANTAGGIO concreto → collega al BENEFICIO emotivo per l'utente",
-    storytelling: "STORYTELLING: Racconta una mini-storia o scenario d'uso che coinvolge il lettore e lo fa immedesimare",
-    direct: "DIRETTO: Vai dritto ai benefici principali senza giri di parole, perfetto per chi cerca info rapide",
-    comparison: "CONFRONTO: Posiziona il prodotto rispetto ad alternative, evidenziando cosa lo rende unico",
+    aida: "AIDA: Attenzione → Interesse → Desiderio → Azione",
+    pas: "PAS: Problema → Agitazione → Soluzione",
+    fab: "FAB: Feature → Advantage → Benefit",
+    storytelling: "Storytelling: racconta una mini-storia o scenario d'uso",
+    direct: "Diretto: vai dritto ai benefici",
+    comparison: "Confronto: posiziona il prodotto rispetto ad alternative",
   };
 
   const langMap: Record<string, string> = {
-    it: "italiano",
-    en: "inglese",
-    fr: "francese",
-    de: "tedesco",
-    es: "spagnolo",
+    it: "italiano", en: "inglese", fr: "francese", de: "tedesco", es: "spagnolo",
   };
 
   const lengthMap: Record<string, string> = {
-    short: "BREVE: 50-80 parole, 2-3 frasi. Perfetta per card prodotto e listing veloci",
-    medium: "MEDIA: 100-150 parole, 3-5 frasi con bullet point. Bilanciata per la maggior parte degli e-commerce",
-    long: "LUNGA: 200-350 parole, descrizione completa con paragrafi strutturati, H3, bullet point, dettagli tecnici e CTA. Ideale per SEO e pagine prodotto complete",
+    short: "BREVE: 50-80 parole, 2-3 frasi",
+    medium: "MEDIA: 100-150 parole, con bullet point",
+    long: "LUNGA: 200-350 parole, descrizione completa con paragrafi, H3, bullet, CTA",
   };
 
   const structureMap: Record<string, string> = {
-    simple: "Testo semplice con paragrafi <p>",
-    structured: "Struttura con <h3> per sezioni principali, <p> per testo, <ul><li> per bullet point",
-    rich: "Struttura ricca: <h3> titolo sezione + <p> intro + <h4> sottosezioni + <ul><li> specifiche + <p><strong>CTA</strong></p> finale",
-    seo_optimized: "SEO-ottimizzata: <h3> con keyword primaria + <p> intro con keyword + <h4> sottosezioni + <ul><li> benefici con keyword secondarie + <p> CTA + struttura che facilita i featured snippet di Google",
+    simple: "Solo paragrafi <p>",
+    structured: "<h3> + <p> + <ul><li>",
+    rich: "<h3> + <h4> + <p> + <ul><li> + CTA finale in <strong>",
+    seo_optimized: "<h3> con keyword + <p> intro + <h4> sottosezioni + <ul><li> con keyword secondarie + CTA, snippet-ready",
   };
 
   const hasDesc = product.description && product.description.length > 20;
-  const cleanDesc = hasDesc
-    ? product.description.replace(/<[^>]+>/g, "").substring(0, 600)
-    : "";
+  const cleanDesc = hasDesc ? product.description.replace(/<[^>]+>/g, "").substring(0, 600) : "";
 
-  const variantsInfo = product.variants && product.variants.length > 1
-    ? `\n- Varianti disponibili: ${product.variants.map((v: any) => v.title).filter((t: string) => t !== "Default Title").join(", ")}`
-    : "";
-
-  const tagsInfo = product.tags && product.tags.length > 0
-    ? `\n- Tag: ${product.tags.join(", ")}`
-    : "";
-
-  return `Sei un copywriter e-commerce senior specializzato in SEO e conversion rate optimization.
+  return `Sei un copywriter e-commerce senior specializzato in SEO e CRO.
 
 PRODOTTO:
 - Titolo: ${product.title}
 - Brand: ${product.vendor || "non specificato"}
 - Categoria: ${product.productType || "non specificata"}
 - Prezzo: €${product.price}
-- SKU: ${product.sku || "N/A"}
-- EAN/Barcode: ${product.barcode || "N/A"}${variantsInfo}${tagsInfo}${imageContext}
+- EAN: ${product.barcode || "N/A"}${imageContext}
 ${cleanDesc ? `- Descrizione attuale: ${cleanDesc}` : ""}
-${barcodeInfo ? `\nINFO AGGIUNTIVE DAL BARCODE:\n${barcodeInfo}` : ""}
+${barcodeInfo ? `\nINFO DAL BARCODE:\n${barcodeInfo}` : ""}
 
 CONFIGURAZIONE:
 - Framework: ${frameworkMap[framework] || framework}
@@ -471,29 +455,25 @@ CONFIGURAZIONE:
 - Lingua: ${langMap[language] || language}
 - Lunghezza: ${lengthMap[length] || length}
 - Struttura HTML: ${structureMap[structure] || structure}
-${keywords ? `- Keyword SEO (includi naturalmente): ${keywords}` : ""}
+${keywords ? `- Keyword SEO da includere: ${keywords}` : ""}
 
-${product.image ? "NOTA: Ti ho fornito anche l'immagine del prodotto. Usa i dettagli visivi (colore, materiale, design, forma) per arricchire la descrizione." : ""}
+REGOLE:
+1. Solo HTML valido — niente markdown né backtick
+2. NON iniziare con "Questo prodotto" o "Il/La [nome]"
+3. NO frasi generiche tipo "alta qualità" o "il migliore"
+4. Bullet point con benefici CONCRETI
+5. Titoli H3/H4 creativi e SEO-friendly, mai "Caratteristiche" o "Descrizione"
 
-REGOLE ASSOLUTE:
-1. Scrivi SOLO codice HTML valido — niente markdown, niente backtick, niente prefissi
-2. NON iniziare con "Questo prodotto" o "Il/La [nome prodotto]"
-3. NON usare frasi generiche: "alta qualità", "il migliore", "unico nel suo genere"
-4. OGNI frase deve aggiungere valore informativo o emotivo
-5. I bullet point devono contenere benefici CONCRETI e SPECIFICI
-6. La CTA finale deve essere naturale, non aggressiva
-7. Se la struttura richiede H3/H4, usa titoli creativi e SEO-friendly, MAI generici come "Caratteristiche" o "Descrizione"
-8. Includi il prezzo nella CTA solo se appropriato per il tono scelto
-
-Scrivi la descrizione HTML ora:`;
+Scrivi SOLO la descrizione HTML:`;
 }
 
-// ── COMPONENTE PRINCIPALE V2 ─────────────────────────────────
+// ── COMPONENTE ───────────────────────────────────────────────
 export default function Index() {
-  const { products } = useLoaderData<typeof loader>();
+  const { products, pageInfo, totalProducts } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
-  // Stato impostazioni
   const [tone, setTone] = useState("emotional");
   const [framework, setFramework] = useState("aida");
   const [language, setLanguage] = useState("it");
@@ -505,36 +485,23 @@ export default function Index() {
   const [pushMode, setPushMode] = useState("replace");
   const [generatedResults, setGeneratedResults] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState(0);
-  const [expandedResult, setExpandedResult] = useState<string | null>(null);
 
-  // Selezione prodotti
   const resourceIDResolver = (product: any) => product.id;
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
     useIndexResourceState(products, { resourceIDResolver });
 
-  const isGenerating =
-    fetcher.state !== "idle" && fetcher.formData?.get("intent") === "generate";
-  const isPushing =
-    fetcher.state !== "idle" &&
-    (fetcher.formData?.get("intent") === "push" || fetcher.formData?.get("intent") === "pushAll");
+  const isGenerating = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "generate";
+  const isPushing = fetcher.state !== "idle" && (fetcher.formData?.get("intent") === "push" || fetcher.formData?.get("intent") === "pushAll");
 
-  // Aggiorna risultati
   if (fetcher.data?.intent === "generate" && fetcher.data?.results) {
     if (JSON.stringify(generatedResults) !== JSON.stringify(fetcher.data.results)) {
       setTimeout(() => setGeneratedResults(fetcher.data.results), 0);
     }
   }
 
-  // Notifica push completato
-  if (fetcher.data?.intent === "pushAll" && fetcher.data?.pushed !== undefined) {
-    // Toast gestito da Shopify
-  }
-
-  // ── HANDLERS ──
   const handleGenerate = useCallback(() => {
     const selected = products.filter((p: any) => selectedResources.includes(p.id));
     if (selected.length === 0) return;
-
     const formData = new FormData();
     formData.append("intent", "generate");
     formData.append("products", JSON.stringify(selected));
@@ -568,7 +535,22 @@ export default function Index() {
     fetcher.submit(formData, { method: "POST" });
   }, [generatedResults, fetcher, pushMode]);
 
-  // ── SELECT OPTIONS ──
+  const goToNextPage = () => {
+    if (pageInfo.endCursor) {
+      navigate(`/app?cursor=${encodeURIComponent(pageInfo.endCursor)}&direction=next`);
+    }
+  };
+
+  const goToPrevPage = () => {
+    if (pageInfo.startCursor) {
+      navigate(`/app?cursor=${encodeURIComponent(pageInfo.startCursor)}&direction=prev`);
+    }
+  };
+
+  const goToFirstPage = () => {
+    navigate(`/app`);
+  };
+
   const toneOptions = [
     { label: "🎭 Emozionale", value: "emotional" },
     { label: "💼 Professionale", value: "professional" },
@@ -606,7 +588,7 @@ export default function Index() {
     { label: "Semplice (solo paragrafi)", value: "simple" },
     { label: "Strutturata (H3 + bullet)", value: "structured" },
     { label: "Ricca (H3 + H4 + bullet + CTA)", value: "rich" },
-    { label: "🔍 SEO-ottimizzata (snippet-ready)", value: "seo_optimized" },
+    { label: "🔍 SEO-ottimizzata", value: "seo_optimized" },
   ];
 
   const pushModeOptions = [
@@ -616,22 +598,16 @@ export default function Index() {
 
   const tabs = [
     { id: "settings", content: "⚙️ Impostazioni", panelID: "settings-panel" },
-    { id: "products", content: "📦 Prodotti (" + products.length + ")", panelID: "products-panel" },
-    { id: "results", content: "✍️ Risultati" + (generatedResults.length > 0 ? " (" + generatedResults.length + ")" : ""), panelID: "results-panel" },
+    { id: "products", content: `📦 Prodotti (${products.length}/${totalProducts})`, panelID: "products-panel" },
+    { id: "results", content: `✍️ Risultati${generatedResults.length > 0 ? ` (${generatedResults.length})` : ""}`, panelID: "results-panel" },
   ];
 
   const successCount = generatedResults.filter((r: any) => r.status === "success").length;
 
-  // ── ROW MARKUP ──
   const rowMarkup = products.map((product: any, index: number) => {
     const result = generatedResults.find((r: any) => r.id === product.id);
     return (
-      <IndexTable.Row
-        id={product.id}
-        key={product.id}
-        selected={selectedResources.includes(product.id)}
-        position={index}
-      >
+      <IndexTable.Row id={product.id} key={product.id} selected={selectedResources.includes(product.id)} position={index}>
         <IndexTable.Cell>
           <Thumbnail
             source={product.image || "https://cdn.shopify.com/s/files/1/0533/2089/files/placeholder-images-image_large.png"}
@@ -649,16 +625,10 @@ export default function Index() {
         </IndexTable.Cell>
         <IndexTable.Cell>{product.vendor}</IndexTable.Cell>
         <IndexTable.Cell>€{product.price}</IndexTable.Cell>
-        <IndexTable.Cell>
-          {product.images?.length || 0} foto
-        </IndexTable.Cell>
+        <IndexTable.Cell>{product.images?.length || 0} foto</IndexTable.Cell>
         <IndexTable.Cell>
           {result ? (
-            result.status === "success" ? (
-              <Badge tone="success">Generata</Badge>
-            ) : (
-              <Badge tone="critical">Errore</Badge>
-            )
+            result.status === "success" ? <Badge tone="success">Generata</Badge> : <Badge tone="critical">Errore</Badge>
           ) : (
             <Badge>In attesa</Badge>
           )}
@@ -674,17 +644,21 @@ export default function Index() {
     );
   });
 
-  // ── RENDER ──
   return (
     <Page>
       <TitleBar title="AI Product Description Generator" />
       <BlockStack gap="500">
 
-        {/* HEADER CON STATS */}
         <InlineStack gap="400" wrap={true}>
           <Card>
             <BlockStack gap="100">
-              <Text as="p" variant="bodySm" tone="subdued">Prodotti</Text>
+              <Text as="p" variant="bodySm" tone="subdued">Totale catalogo</Text>
+              <Text as="p" variant="headingLg">{totalProducts}</Text>
+            </BlockStack>
+          </Card>
+          <Card>
+            <BlockStack gap="100">
+              <Text as="p" variant="bodySm" tone="subdued">Caricati</Text>
               <Text as="p" variant="headingLg">{products.length}</Text>
             </BlockStack>
           </Card>
@@ -700,22 +674,13 @@ export default function Index() {
               <Text as="p" variant="headingLg">{successCount}</Text>
             </BlockStack>
           </Card>
-          <Card>
-            <BlockStack gap="100">
-              <Text as="p" variant="bodySm" tone="subdued">Costo stimato</Text>
-              <Text as="p" variant="headingLg">~€{(selectedResources.length * (length === "long" ? 0.008 : length === "medium" ? 0.005 : 0.003)).toFixed(3)}</Text>
-            </BlockStack>
-          </Card>
         </InlineStack>
 
-        {/* TABS */}
         <Card>
           <Tabs tabs={tabs} selected={activeTab} onSelect={setActiveTab}>
-            {/* TAB IMPOSTAZIONI */}
             {activeTab === 0 && (
               <Box padding="400">
                 <BlockStack gap="500">
-                  {/* Riga 1: Tono + Framework + Lingua */}
                   <InlineStack gap="400" wrap={true}>
                     <div style={{ minWidth: "200px", flex: 1 }}>
                       <Select label="Tono di voce" options={toneOptions} value={tone} onChange={setTone} />
@@ -728,7 +693,6 @@ export default function Index() {
                     </div>
                   </InlineStack>
 
-                  {/* Riga 2: Lunghezza + Struttura + Push mode */}
                   <InlineStack gap="400" wrap={true}>
                     <div style={{ minWidth: "200px", flex: 1 }}>
                       <Select label="Lunghezza descrizione" options={lengthOptions} value={length} onChange={setLength} />
@@ -741,17 +705,15 @@ export default function Index() {
                     </div>
                   </InlineStack>
 
-                  {/* Keyword SEO */}
                   <TextField
                     label="Keyword SEO (opzionale)"
                     value={keywords}
                     onChange={setKeywords}
                     placeholder="es: scarpe running, sneakers uomo, regalo sportivo"
                     autoComplete="off"
-                    helpText="Separa le keyword con virgola. Verranno incluse naturalmente nel testo."
+                    helpText="Separa le keyword con virgola"
                   />
 
-                  {/* Opzioni avanzate */}
                   <Divider />
                   <Text as="h3" variant="headingMd">🔬 Fonti dati per la generazione</Text>
                   <InlineStack gap="600">
@@ -759,17 +721,14 @@ export default function Index() {
                       label="📸 Analizza immagine prodotto (Claude Vision)"
                       checked={useImage}
                       onChange={setUseImage}
-                      helpText="Claude guarderà la foto per descrivere colori, materiali, design"
                     />
                     <Checkbox
                       label="🔍 Cerca info da EAN/Barcode"
                       checked={useBarcode}
                       onChange={setUseBarcode}
-                      helpText="Usa il codice a barre per trovare specifiche tecniche aggiuntive"
                     />
                   </InlineStack>
 
-                  {/* BOTTONE GENERA */}
                   <Divider />
                   <InlineStack gap="300" align="end">
                     <Button
@@ -779,9 +738,7 @@ export default function Index() {
                       loading={isGenerating}
                       disabled={selectedResources.length === 0}
                     >
-                      {isGenerating
-                        ? `Generando ${selectedResources.length} descrizioni...`
-                        : `🚀 Genera ${selectedResources.length} descrizioni`}
+                      {isGenerating ? `Generando ${selectedResources.length} descrizioni...` : `🚀 Genera ${selectedResources.length} descrizioni`}
                     </Button>
                   </InlineStack>
 
@@ -794,10 +751,27 @@ export default function Index() {
               </Box>
             )}
 
-            {/* TAB PRODOTTI */}
             {activeTab === 1 && (
               <Box padding="400">
                 <BlockStack gap="300">
+                  {/* PAGINAZIONE INFO */}
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      Mostrando {products.length} di {totalProducts} prodotti
+                    </Text>
+                    <InlineStack gap="200">
+                      <Button onClick={goToFirstPage} disabled={!searchParams.get("cursor")}>
+                        ⏮ Inizio
+                      </Button>
+                      <Button onClick={goToPrevPage} disabled={!pageInfo.hasPreviousPage}>
+                        ← Precedente
+                      </Button>
+                      <Button onClick={goToNextPage} disabled={!pageInfo.hasNextPage}>
+                        Successiva →
+                      </Button>
+                    </InlineStack>
+                  </InlineStack>
+
                   {products.length > 0 ? (
                     <IndexTable
                       resourceName={{ singular: "prodotto", plural: "prodotti" }}
@@ -824,11 +798,23 @@ export default function Index() {
                       <p>Aggiungi prodotti al tuo negozio per iniziare.</p>
                     </EmptyState>
                   )}
+
+                  {/* PAGINAZIONE BOTTOM */}
+                  <InlineStack align="center" gap="200">
+                    <Button onClick={goToFirstPage} disabled={!searchParams.get("cursor")}>
+                      ⏮ Inizio
+                    </Button>
+                    <Button onClick={goToPrevPage} disabled={!pageInfo.hasPreviousPage}>
+                      ← Precedente
+                    </Button>
+                    <Button onClick={goToNextPage} disabled={!pageInfo.hasNextPage}>
+                      Successiva →
+                    </Button>
+                  </InlineStack>
                 </BlockStack>
               </Box>
             )}
 
-            {/* TAB RISULTATI */}
             {activeTab === 2 && (
               <Box padding="400">
                 <BlockStack gap="400">
@@ -838,21 +824,11 @@ export default function Index() {
                     </Banner>
                   ) : (
                     <>
-                      {/* Azioni bulk */}
                       <InlineStack gap="300" align="space-between">
-                        <Text as="h2" variant="headingLg">
-                          {successCount} descrizioni pronte
-                        </Text>
-                        <InlineStack gap="200">
-                          <Button
-                            variant="primary"
-                            onClick={handlePushAll}
-                            loading={isPushing}
-                            disabled={successCount === 0}
-                          >
-                            ✅ Pubblica tutte ({successCount}) su Shopify
-                          </Button>
-                        </InlineStack>
+                        <Text as="h2" variant="headingLg">{successCount} descrizioni pronte</Text>
+                        <Button variant="primary" onClick={handlePushAll} loading={isPushing} disabled={successCount === 0}>
+                          ✅ Pubblica tutte ({successCount}) su Shopify
+                        </Button>
                       </InlineStack>
 
                       {fetcher.data?.intent === "pushAll" && (
@@ -861,34 +837,24 @@ export default function Index() {
                         </Banner>
                       )}
 
-                      {/* Lista risultati */}
                       {generatedResults.map((result: any) => (
                         <Card key={result.id}>
                           <BlockStack gap="300">
                             <InlineStack align="space-between" blockAlign="center">
                               <InlineStack gap="300" blockAlign="center">
-                                {result.image && (
-                                  <Thumbnail source={result.image} alt={result.title} size="small" />
-                                )}
+                                {result.image && <Thumbnail source={result.image} alt={result.title} size="small" />}
                                 <BlockStack gap="100">
                                   <Text as="h3" variant="headingMd">{result.title}</Text>
                                   <Text as="p" variant="bodySm" tone="subdued">{result.vendor} · €{result.price}</Text>
                                 </BlockStack>
                               </InlineStack>
-                              {result.status === "success" ? (
-                                <Badge tone="success">OK</Badge>
-                              ) : (
-                                <Badge tone="critical">Errore</Badge>
-                              )}
+                              {result.status === "success" ? <Badge tone="success">OK</Badge> : <Badge tone="critical">Errore</Badge>}
                             </InlineStack>
 
                             {result.status === "success" && (
                               <>
                                 <Box padding="400" background="bg-surface-secondary" borderRadius="200">
-                                  <div
-                                    dangerouslySetInnerHTML={{ __html: result.newDescription }}
-                                    style={{ lineHeight: "1.6", fontSize: "14px" }}
-                                  />
+                                  <div dangerouslySetInnerHTML={{ __html: result.newDescription }} style={{ lineHeight: "1.6", fontSize: "14px" }} />
                                 </Box>
                                 <InlineStack gap="200">
                                   <Button variant="primary" onClick={() => handlePush(result.id, result.newDescription)} loading={isPushing}>
@@ -896,9 +862,6 @@ export default function Index() {
                                   </Button>
                                   <Button onClick={() => navigator.clipboard.writeText(result.newDescription)}>
                                     📋 Copia HTML
-                                  </Button>
-                                  <Button onClick={() => handleGenerate()} variant="plain">
-                                    🔄 Rigenera
                                   </Button>
                                 </InlineStack>
                               </>
