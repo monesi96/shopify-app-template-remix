@@ -489,10 +489,28 @@ export default function Index() {
   const [useBarcode, setUseBarcode] = useState(true);
   const [pushMode, setPushMode] = useState("replace");
   const [onlyMissing, setOnlyMissing] = useState(searchParams.get("missing") === "true");
+  const [bulkProducts, setBulkProducts] = useState<any[]>([]);
+  const [isLoadingBulk, setIsLoadingBulk] = useState(false);
+  const [bulkLoadInfo, setBulkLoadInfo] = useState<string>("");
+
+  const handleLoadAllMissing = async () => {
+    setIsLoadingBulk(true);
+    setBulkLoadInfo("Caricamento prodotti senza descrizione in corso... (può richiedere 10-30 secondi)");
+    try {
+      const resp = await fetch("/api/load-all-missing");
+      const data = await resp.json();
+      setBulkProducts(data.products);
+      setBulkLoadInfo(`✅ Caricati ${data.products.length} prodotti senza descrizione (${data.pagesLoaded} pagine analizzate)${data.truncated ? " — limite max 500 raggiunto" : ""}`);
+    } catch (e: any) {
+      setBulkLoadInfo("❌ Errore: " + e.message);
+    } finally {
+      setIsLoadingBulk(false);
+    }
+  };
   const [generatedResults, setGeneratedResults] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState(0);
 
-  const filteredProducts = products;
+  const filteredProducts = bulkProducts.length > 0 ? bulkProducts : products;
   const resourceIDResolver = (product: any) => product.id;
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
     useIndexResourceState(filteredProducts, { resourceIDResolver });
@@ -770,24 +788,31 @@ export default function Index() {
             {activeTab === 1 && (
               <Box padding="400">
                 <BlockStack gap="300">
-                  <InlineStack gap="400" blockAlign="center">
-                    <Checkbox
-                      label="🔴 Mostra solo prodotti SENZA descrizione (tutto il catalogo)"
-                      checked={onlyMissing}
-                      onChange={(checked) => {
-                        setOnlyMissing(checked);
-                        const newParams = new URLSearchParams(searchParams);
-                        if (checked) {
-                          newParams.set("missing", "true");
-                        } else {
-                          newParams.delete("missing");
-                        }
-                        newParams.delete("cursor");
-                        newParams.delete("direction");
-                        navigate(`/app?${newParams.toString()}`);
-                      }}
-                    />
+                  <InlineStack gap="400" blockAlign="center" wrap={true}>
+                    <Button
+                      variant="primary"
+                      tone="success"
+                      onClick={handleLoadAllMissing}
+                      loading={isLoadingBulk}
+                    >
+                      🔍 Carica TUTTI i prodotti senza descrizione (max 500)
+                    </Button>
+                    {bulkProducts.length > 0 && (
+                      <Button
+                        onClick={() => {
+                          setBulkProducts([]);
+                          setBulkLoadInfo("");
+                        }}
+                      >
+                        ✖ Reset (torna alla paginazione normale)
+                      </Button>
+                    )}
                   </InlineStack>
+                  {bulkLoadInfo && (
+                    <Banner tone={bulkLoadInfo.startsWith("❌") ? "critical" : bulkLoadInfo.startsWith("✅") ? "success" : "info"}>
+                      <p>{bulkLoadInfo}</p>
+                    </Banner>
+                  )}
                   {/* PAGINAZIONE INFO */}
                   <InlineStack align="space-between" blockAlign="center">
                     <Text as="p" variant="bodyMd" tone="subdued">
