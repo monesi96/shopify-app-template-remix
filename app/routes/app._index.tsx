@@ -35,13 +35,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const cursor = url.searchParams.get("cursor");
   const direction = url.searchParams.get("direction") || "next";
+  const onlyMissing = url.searchParams.get("missing") === "true";
+  const filterQuery = onlyMissing ? '-description:*' : '';
 
   let query: string;
 
   if (cursor && direction === "next") {
     query = `#graphql
       query getProducts($cursor: String!) {
-        products(first: ${PRODUCTS_PER_PAGE}, after: $cursor) {
+        products(first: ${PRODUCTS_PER_PAGE}, after: $cursor, query: "${filterQuery}") {
           edges {
             cursor
             node {
@@ -68,7 +70,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   } else if (cursor && direction === "prev") {
     query = `#graphql
       query getProducts($cursor: String!) {
-        products(last: ${PRODUCTS_PER_PAGE}, before: $cursor) {
+        products(last: ${PRODUCTS_PER_PAGE}, before: $cursor, query: "${filterQuery}") {
           edges {
             cursor
             node {
@@ -95,7 +97,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   } else {
     query = `#graphql
       query getProducts {
-        products(first: ${PRODUCTS_PER_PAGE}) {
+        products(first: ${PRODUCTS_PER_PAGE}, query: "${filterQuery}") {
           edges {
             cursor
             node {
@@ -483,13 +485,11 @@ export default function Index() {
   const [useImage, setUseImage] = useState(true);
   const [useBarcode, setUseBarcode] = useState(true);
   const [pushMode, setPushMode] = useState("replace");
-  const [onlyMissing, setOnlyMissing] = useState(false);
+  const [onlyMissing, setOnlyMissing] = useState(searchParams.get("missing") === "true");
   const [generatedResults, setGeneratedResults] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState(0);
 
-  const filteredProducts = onlyMissing
-    ? products.filter((p: any) => !p.description || p.description.length <= 20)
-    : products;
+  const filteredProducts = products;
   const resourceIDResolver = (product: any) => product.id;
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
     useIndexResourceState(filteredProducts, { resourceIDResolver });
@@ -541,13 +541,13 @@ export default function Index() {
 
   const goToNextPage = () => {
     if (pageInfo.endCursor) {
-      navigate(`/app?cursor=${encodeURIComponent(pageInfo.endCursor)}&direction=next`);
+      navigate(`/app?cursor=${encodeURIComponent(pageInfo.endCursor)}&direction=next${onlyMissing ? "&missing=true" : ""}`);
     }
   };
 
   const goToPrevPage = () => {
     if (pageInfo.startCursor) {
-      navigate(`/app?cursor=${encodeURIComponent(pageInfo.startCursor)}&direction=prev`);
+      navigate(`/app?cursor=${encodeURIComponent(pageInfo.startCursor)}&direction=prev${onlyMissing ? "&missing=true" : ""}`);
     }
   };
 
@@ -760,9 +760,12 @@ export default function Index() {
                 <BlockStack gap="300">
                   <InlineStack gap="400" blockAlign="center">
                     <Checkbox
-                      label="🔴 Mostra solo prodotti SENZA descrizione"
+                      label="🔴 Mostra solo prodotti SENZA descrizione (tutto il catalogo)"
                       checked={onlyMissing}
-                      onChange={setOnlyMissing}
+                      onChange={(checked) => {
+                        setOnlyMissing(checked);
+                        navigate(checked ? "/app?missing=true" : "/app");
+                      }}
                     />
                   </InlineStack>
                   {/* PAGINAZIONE INFO */}
