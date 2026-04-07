@@ -125,8 +125,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const variables = cursor ? { cursor } : {};
+  console.log('[DEBUG QUERY]', query.substring(0, 300));
   const response = await admin.graphql(query, { variables });
   const responseJson = await response.json();
+  console.log('[DEBUG RESPONSE] products count:', responseJson.data?.products?.edges?.length);
 
   // Conta totale prodotti
   const countResp = await admin.graphql(`#graphql
