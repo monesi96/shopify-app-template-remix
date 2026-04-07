@@ -16,6 +16,7 @@ import {
   Thumbnail,
   EmptyState,
   Select,
+  Checkbox,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -64,10 +65,18 @@ export default function ImagesPage() {
   const [searchParams] = useSearchParams();
 
   const [scale, setScale] = useState("4");
+  const [onlyLowRes, setOnlyLowRes] = useState(false);
+  const [onlyLowRes, setOnlyLowRes] = useState(false);
   const [upscaleResults, setUpscaleResults] = useState<any[]>([]);
 
+  const filteredProducts = onlyLowRes
+    ? products.filter((p: any) => p.needsUpscale)
+    : products;
+  const filteredProducts = onlyLowRes
+    ? products.filter((p: any) => p.needsUpscale)
+    : products;
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
-    useIndexResourceState(products, { resourceIDResolver: (p: any) => p.id });
+    useIndexResourceState(filteredProducts, { resourceIDResolver: (p: any) => p.id });
 
   const isUpscaling = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "upscale";
   const isReplacing = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "replaceImage";
@@ -79,7 +88,7 @@ export default function ImagesPage() {
   }
 
   const handleUpscale = useCallback(() => {
-    const selected = products.filter((p: any) => selectedResources.includes(p.id));
+    const selected = filteredProducts.filter((p: any) => selectedResources.includes(p.id));
     if (selected.length === 0) return;
     const formData = new FormData();
     formData.append("intent", "upscale");
@@ -110,7 +119,7 @@ export default function ImagesPage() {
     { label: "4x (consigliato)", value: "4" },
   ];
 
-  const rowMarkup = products.map((product: any, index: number) => (
+  const rowMarkup = filteredProducts.map((product: any, index: number) => (
     <IndexTable.Row
       id={product.id}
       key={product.id}
@@ -200,6 +209,16 @@ export default function ImagesPage() {
         <Card>
           <BlockStack gap="300">
             <Text as="h2" variant="headingLg">📦 Prodotti</Text>
+            <Checkbox
+              label="🔴 Mostra solo immagini da upscalare (< 1000px)"
+              checked={onlyLowRes}
+              onChange={setOnlyLowRes}
+            />
+            <Checkbox
+              label="🔴 Mostra solo immagini da upscalare (< 1000px)"
+              checked={onlyLowRes}
+              onChange={setOnlyLowRes}
+            />
             <InlineStack align="space-between" blockAlign="center">
               <Text as="p" variant="bodyMd" tone="subdued">
                 Mostrando {products.length} di {totalProducts}
@@ -214,7 +233,7 @@ export default function ImagesPage() {
             {products.length > 0 ? (
               <IndexTable
                 resourceName={{ singular: "prodotto", plural: "prodotti" }}
-                itemCount={products.length}
+                itemCount={filteredProducts.length}
                 selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
                 onSelectionChange={handleSelectionChange}
                 headings={[

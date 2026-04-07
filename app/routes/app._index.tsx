@@ -483,12 +483,16 @@ export default function Index() {
   const [useImage, setUseImage] = useState(true);
   const [useBarcode, setUseBarcode] = useState(true);
   const [pushMode, setPushMode] = useState("replace");
+  const [onlyMissing, setOnlyMissing] = useState(false);
   const [generatedResults, setGeneratedResults] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState(0);
 
+  const filteredProducts = onlyMissing
+    ? products.filter((p: any) => !p.description || p.description.length <= 20)
+    : products;
   const resourceIDResolver = (product: any) => product.id;
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
-    useIndexResourceState(products, { resourceIDResolver });
+    useIndexResourceState(filteredProducts, { resourceIDResolver });
 
   const isGenerating = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "generate";
   const isPushing = fetcher.state !== "idle" && (fetcher.formData?.get("intent") === "push" || fetcher.formData?.get("intent") === "pushAll");
@@ -604,7 +608,7 @@ export default function Index() {
 
   const successCount = generatedResults.filter((r: any) => r.status === "success").length;
 
-  const rowMarkup = products.map((product: any, index: number) => {
+  const rowMarkup = filteredProducts.map((product: any, index: number) => {
     const result = generatedResults.find((r: any) => r.id === product.id);
     return (
       <IndexTable.Row id={product.id} key={product.id} selected={selectedResources.includes(product.id)} position={index}>
@@ -754,6 +758,13 @@ export default function Index() {
             {activeTab === 1 && (
               <Box padding="400">
                 <BlockStack gap="300">
+                  <InlineStack gap="400" blockAlign="center">
+                    <Checkbox
+                      label="🔴 Mostra solo prodotti SENZA descrizione"
+                      checked={onlyMissing}
+                      onChange={setOnlyMissing}
+                    />
+                  </InlineStack>
                   {/* PAGINAZIONE INFO */}
                   <InlineStack align="space-between" blockAlign="center">
                     <Text as="p" variant="bodyMd" tone="subdued">
@@ -775,7 +786,7 @@ export default function Index() {
                   {products.length > 0 ? (
                     <IndexTable
                       resourceName={{ singular: "prodotto", plural: "prodotti" }}
-                      itemCount={products.length}
+                      itemCount={filteredProducts.length}
                       selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
                       onSelectionChange={handleSelectionChange}
                       headings={[
