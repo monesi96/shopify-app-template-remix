@@ -36,7 +36,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const cursor = url.searchParams.get("cursor");
   const direction = url.searchParams.get("direction") || "next";
   const onlyMissing = url.searchParams.get("missing") === "true";
-  const filterQuery = onlyMissing ? 'description:""' : '';
+  const filterQuery = onlyMissing ? '-description:*' : '';
   console.log('[DEBUG LOADER] onlyMissing:', onlyMissing, 'filterQuery:', filterQuery);
 
   let query: string;
