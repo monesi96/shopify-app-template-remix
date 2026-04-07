@@ -43,7 +43,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (cursor && direction === "next") {
     query = `#graphql
       query getProducts($cursor: String!) {
-        products(first: ${PRODUCTS_PER_PAGE}, after: $cursor, query: "${filterQuery}") {
+        products(first: ${PRODUCTS_PER_PAGE}, after: $cursor${filterQuery ? `, query: "${filterQuery}"` : ""}) {
           edges {
             cursor
             node {
@@ -70,7 +70,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   } else if (cursor && direction === "prev") {
     query = `#graphql
       query getProducts($cursor: String!) {
-        products(last: ${PRODUCTS_PER_PAGE}, before: $cursor, query: "${filterQuery}") {
+        products(last: ${PRODUCTS_PER_PAGE}, before: $cursor${filterQuery ? `, query: "${filterQuery}"` : ""}) {
           edges {
             cursor
             node {
@@ -97,7 +97,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   } else {
     query = `#graphql
       query getProducts {
-        products(first: ${PRODUCTS_PER_PAGE}, query: "${filterQuery}") {
+        products(first: ${PRODUCTS_PER_PAGE}${filterQuery ? `, query: "${filterQuery}"` : ""}) {
           edges {
             cursor
             node {
