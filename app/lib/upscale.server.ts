@@ -8,7 +8,7 @@ export async function loadProductsWithImages(admin: any, cursor: string | null, 
   if (cursor && direction === "next") {
     query = `#graphql
       query getProductsWithImages($cursor: String!) {
-        products(first: ${PRODUCTS_PER_PAGE}, after: $cursor) {
+        products(first: ${PRODUCTS_PER_PAGE}, after: $cursor, sortKey: CREATED_AT, reverse: true) {
           edges {
             cursor
             node {
@@ -29,7 +29,7 @@ export async function loadProductsWithImages(admin: any, cursor: string | null, 
   } else if (cursor && direction === "prev") {
     query = `#graphql
       query getProductsWithImages($cursor: String!) {
-        products(last: ${PRODUCTS_PER_PAGE}, before: $cursor) {
+        products(last: ${PRODUCTS_PER_PAGE}, before: $cursor, sortKey: CREATED_AT, reverse: true) {
           edges {
             cursor
             node {
@@ -50,7 +50,7 @@ export async function loadProductsWithImages(admin: any, cursor: string | null, 
   } else {
     query = `#graphql
       query getProductsWithImages {
-        products(first: ${PRODUCTS_PER_PAGE}) {
+        products(first: ${PRODUCTS_PER_PAGE}, sortKey: CREATED_AT, reverse: true) {
           edges {
             cursor
             node {
