@@ -69,12 +69,52 @@ export default function ImagesPage() {
   const [model, setModel] = useState("swinir");
   const [onlyLowRes, setOnlyLowRes] = useState(false);
   const [upscaleResults, setUpscaleResults] = useState<any[]>([]);
+  const [removeBackground, setRemoveBackground] = useState(false);
+  const [persistedSelection, setPersistedSelection] = useState<Set<string>>(new Set());
 
   const filteredProducts = onlyLowRes
     ? products.filter((p: any) => p.needsUpscale)
     : products;
-  const { selectedResources, allResourcesSelected, handleSelectionChange } =
-    useIndexResourceState(filteredProducts, { resourceIDResolver: (p: any) => p.id });
+  // Selezione persistente tra pagine
+  const selectedResources = filteredProducts
+    .filter((p: any) => persistedSelection.has(p.id))
+    .map((p: any) => p.id);
+
+  const allResourcesSelected = filteredProducts.length > 0 &&
+    filteredProducts.every((p: any) => persistedSelection.has(p.id));
+
+  const handleSelectionChange = (
+    selectionType: any,
+    isSelecting: boolean,
+    selection?: any
+  ) => {
+    setPersistedSelection((prev) => {
+      const next = new Set(prev);
+      if (selectionType === "all" || selectionType === "page") {
+        // Seleziona/deseleziona tutta la pagina
+        filteredProducts.forEach((p: any) => {
+          if (isSelecting) next.add(p.id);
+          else next.delete(p.id);
+        });
+      } else if (selectionType === "single") {
+        if (isSelecting) next.add(selection);
+        else next.delete(selection);
+      } else if (selectionType === "multi") {
+        // Range selection (shift+click)
+        const [start, end] = selection;
+        for (let i = start; i <= end; i++) {
+          const p = filteredProducts[i];
+          if (p) {
+            if (isSelecting) next.add(p.id);
+            else next.delete(p.id);
+          }
+        }
+      }
+      return next;
+    });
+  };
+
+  const clearAllSelection = () => setPersistedSelection(new Set());
 
   const isUpscaling = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "upscale";
   const isReplacing = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "replaceImage";
@@ -86,7 +126,9 @@ export default function ImagesPage() {
   }
 
   const handleUpscale = useCallback(() => {
-    const selected = filteredProducts.filter((p: any) => selectedResources.includes(p.id));
+    // Per l'upscale serviranno solo i prodotti caricati nella pagina corrente
+    // (non possiamo upscalare prodotti non caricati). Filtriamo i selezionati alla pagina corrente.
+    const selected = filteredProducts.filter((p: any) => persistedSelection.has(p.id));
     if (selected.length === 0) return;
     const formData = new FormData();
     formData.append("intent", "upscale");
@@ -171,8 +213,11 @@ export default function ImagesPage() {
           </Card>
           <Card>
             <BlockStack gap="100">
-              <Text as="p" variant="bodySm" tone="subdued">Selezionati</Text>
-              <Text as="p" variant="headingLg">{selectedResources.length}</Text>
+              <Text as="p" variant="bodySm" tone="subdued">Selezionati (totale)</Text>
+              <Text as="p" variant="headingLg">{persistedSelection.size}</Text>
+              {persistedSelection.size > 0 && (
+                <Button size="micro" onClick={clearAllSelection}>Pulisci</Button>
+              )}
             </BlockStack>
           </Card>
           <Card>
