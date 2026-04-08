@@ -121,6 +121,7 @@ export async function upscaleImages(products: any[], scale: number, model: strin
 
     for (const img of product.images) {
       try {
+        let imageUrlForUpscale: string = img.url;
         let modelId = "";
         let modelInput: any = {};
 
@@ -141,7 +142,7 @@ export async function upscaleImages(products: any[], scale: number, model: strin
           // Default: SwinIR
           modelId = "jingyunliang/swinir:660d922d33153019e8c263a3bba265de882e7f4f70396546b6c9c8f9d47a021a";
           modelInput = {
-            image: img.url,
+            image: imageUrlForUpscale,
             task_type: "Real-World Image Super-Resolution-Large",
             noise: 15,
             jpeg: 40,
