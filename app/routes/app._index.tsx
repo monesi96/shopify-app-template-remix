@@ -184,9 +184,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const useBarcode = formData.get("useBarcode") as string;
     const products = JSON.parse(productsJSON);
 
+    const BATCH_SIZE = 5;
     const results: any[] = [];
 
-    for (const product of products) {
+    // Funzione che processa un singolo prodotto (usata in parallelo)
+    const processProduct = async (product: any) => {
       let barcodeInfo = "";
       if (useBarcode === "true" && product.barcode) {
         try {
@@ -274,7 +276,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           .replace(/\s*```$/i, "")
           .trim();
 
-        results.push({
+        return {
           id: product.id,
           title: product.title,
           image: product.image,
@@ -282,9 +284,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           price: product.price,
           newDescription,
           status: newDescription ? "success" : "error",
-        });
+        };
       } catch (error: any) {
-        results.push({
+        return {
           id: product.id,
           title: product.title,
           image: product.image,
@@ -293,8 +295,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           newDescription: "",
           status: "error",
           error: error.message,
-        });
+        };
       }
+    };
+
+    // Processa in batch paralleli di 5 prodotti alla volta
+    for (let i = 0; i < products.length; i += BATCH_SIZE) {
+      const batch = products.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(processProduct));
+      results.push(...batchResults);
     }
 
     return json({ intent: "generate", results });
