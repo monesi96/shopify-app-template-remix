@@ -130,11 +130,11 @@ export async function upscaleImages(products: any[], scale: number, model: strin
           modelInput = {
             image: imageUrlForUpscale,
             scale_factor: scale,
-            dynamic: 8,
-            creativity: 0.5,
-            resemblance: 1.5,
-            sharpen: 2,
-            num_inference_steps: 30,
+            dynamic: 6,
+            creativity: 0.1,
+            resemblance: 2.5,
+            sharpen: 1,
+            num_inference_steps: 25,
             handfix: "disabled",
             output_format: "png",
           };
