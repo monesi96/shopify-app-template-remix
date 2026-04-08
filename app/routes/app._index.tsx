@@ -443,33 +443,63 @@ function buildPrompt(product: any, tone: string, framework: string, language: st
   const hasDesc = product.description && product.description.length > 20;
   const cleanDesc = hasDesc ? product.description.replace(/<[^>]+>/g, "").substring(0, 600) : "";
 
-  return `Sei un copywriter e-commerce senior specializzato in SEO e CRO.
+  return `Sei un SEO specialist e copywriter e-commerce di livello senior, specializzato in product page SEO 2026. Conosci a fondo le best practice di SEMrush, Ahrefs, Shopify e Google Search Quality Guidelines.
 
-PRODOTTO:
+📦 PRODOTTO DA OTTIMIZZARE:
 - Titolo: ${product.title}
 - Brand: ${product.vendor || "non specificato"}
 - Categoria: ${product.productType || "non specificata"}
 - Prezzo: €${product.price}
-- EAN: ${product.barcode || "N/A"}${imageContext}
-${cleanDesc ? `- Descrizione attuale: ${cleanDesc}` : ""}
-${barcodeInfo ? `\nINFO DAL BARCODE:\n${barcodeInfo}` : ""}
+- EAN/Barcode: ${product.barcode || "N/A"}${imageContext}
+${cleanDesc ? `- Descrizione esistente (da migliorare radicalmente, NON copiare): ${cleanDesc}` : ""}
+${barcodeInfo ? `\n🔍 INFO TECNICHE DAL BARCODE:\n${barcodeInfo}` : ""}
 
-CONFIGURAZIONE:
-- Framework: ${frameworkMap[framework] || framework}
-- Tono: ${toneMap[tone] || tone}
+⚙️ CONFIGURAZIONE:
+- Framework copywriting: ${frameworkMap[framework] || framework}
+- Tono di voce: ${toneMap[tone] || tone}
 - Lingua: ${langMap[language] || language}
 - Lunghezza: ${lengthMap[length] || length}
 - Struttura HTML: ${structureMap[structure] || structure}
-${keywords ? `- Keyword SEO da includere: ${keywords}` : ""}
+${keywords ? `- Keyword primarie da includere: ${keywords}` : ""}
 
-REGOLE:
-1. Solo HTML valido — niente markdown né backtick
-2. NON iniziare con "Questo prodotto" o "Il/La [nome]"
-3. NO frasi generiche tipo "alta qualità" o "il migliore"
-4. Bullet point con benefici CONCRETI
-5. Titoli H3/H4 creativi e SEO-friendly, mai "Caratteristiche" o "Descrizione"
+🎯 BEST PRACTICE SEO 2026 (OBBLIGATORIE):
 
-Scrivi SOLO la descrizione HTML:`;
+1. **Keyword strategy**: usa 1 keyword primaria + 3-5 long-tail keyword correlate. Densità keyword 3-5 menzioni ogni 300 parole. Le long-tail devono essere VARIANTI naturali che un acquirente cercherebbe (es. "scarpe running uomo asfalto" invece di solo "scarpe").
+
+2. **Search intent commerciale**: scrivi pensando a chi sta valutando l'acquisto. Includi termini come "comprare", "scegli", "ideale per", "perfetto per" senza forzare.
+
+3. **Features → Benefits**: NON elencare specifiche tecniche secche. Trasforma ogni feature in un beneficio concreto.
+   ❌ "Batteria 5000mAh"
+   ✅ "Fino a 48 ore di musica senza ricaricare — perfetto per i viaggi"
+
+4. **Problem-solving language**: identifica il problema che il prodotto risolve nelle prime 2 frasi. I clienti comprano soluzioni, non oggetti.
+
+5. **Specifica e concretezza**: niente parole vuote come "alta qualità", "premium", "il migliore", "innovativo". Sostituisci con NUMERI, MATERIALI, USE CASE specifici.
+
+6. **Scannability**: il 79% degli utenti scannerizza, non legge. Usa H3/H4 informativi, bullet point brevi, paragrafi max 3 righe.
+
+7. **AI Overviews ready**: Google AI Overview cita contenuti strutturati. Includi una mini-FAQ in fondo (2-3 domande) per intercettare query dirette.
+
+8. **E-E-A-T signals**: dimostra Expertise/Experience nel testo (es. "test su 1000 ore di utilizzo", "approvato da [autorità]" SE VERO, altrimenti ometti).
+
+9. **Long-tail nei sottotitoli H4**: i sottotitoli devono includere variazioni della keyword per aumentare la rilevanza semantica.
+
+10. **Call-to-action soft**: chiudi con un CTA che richiama urgenza o esclusività SENZA essere pushy.
+
+🚫 ERRORI DA EVITARE:
+- NON iniziare con "Questo prodotto" o "Il/La [nome del prodotto]"
+- NON usare manufacturer descriptions / generic copy
+- NON usare keyword stuffing
+- NON ripetere informazioni del titolo
+- NON usare titoli generici come "Caratteristiche", "Descrizione", "Dettagli"
+- NON inventare certificazioni, premi, statistiche
+
+📝 OUTPUT:
+- SOLO HTML valido (no markdown, no backtick, no spiegazioni)
+- Struttura semantica corretta (h3, h4, p, ul/li, strong)
+- Pronto per essere incollato in Shopify
+
+Genera ora la descrizione HTML ottimizzata:`;
 }
 
 // ── COMPONENTE ───────────────────────────────────────────────
@@ -827,6 +857,9 @@ export default function Index() {
                       </Button>
                       <Button onClick={goToNextPage} disabled={!pageInfo.hasNextPage}>
                         Successiva →
+                      </Button>
+                      <Button onClick={() => navigate(0)}>
+                        🔄 Aggiorna
                       </Button>
                     </InlineStack>
                   </InlineStack>
