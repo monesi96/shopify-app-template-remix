@@ -146,9 +146,30 @@ export async function upscaleImages(products: any[], scale: number, model: strin
           };
         }
 
-        const output = await replicate.run(modelId as `${string}/${string}:${string}`, {
-          input: modelInput,
-        });
+        let output;
+        let attempts = 0;
+        const maxAttempts = 4;
+        while (attempts < maxAttempts) {
+          try {
+            output = await replicate.run(modelId as `${string}/${string}:${string}`, {
+              input: modelInput,
+            });
+            break;
+          } catch (err: any) {
+            attempts++;
+            const errMsg = err.message || String(err);
+            if (errMsg.includes("429") || errMsg.includes("Too Many Requests")) {
+              const retryMatch = errMsg.match(/retry_after["\s:]+(\d+)/);
+              const retrySec = retryMatch ? parseInt(retryMatch[1]) : 12;
+              const waitMs = (retrySec + 2) * 1000;
+              console.log(`[UPSCALE] Rate limit hit, waiting ${waitMs}ms before retry ${attempts}/${maxAttempts}`);
+              await new Promise((res) => setTimeout(res, waitMs));
+              continue;
+            }
+            throw err;
+          }
+        }
+        if (!output) throw new Error("Max retries reached after rate limit");
 
         const upscaledUrl = typeof output === "string" ? output : String(output);
 
