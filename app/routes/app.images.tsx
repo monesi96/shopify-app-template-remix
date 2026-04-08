@@ -54,15 +54,20 @@ export default function ImagesPage() {
   // Selection persistente
   const [persistedSelection, setPersistedSelection] = useState<Set<string>>(new Set());
   const [onlyLowRes, setOnlyLowRes] = useState(false);
+  const [hideEmpty, setHideEmpty] = useState(true);
 
   // Results
   const [results, setResults] = useState<any[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isReplacing, setIsReplacing] = useState<string | null>(null);
 
-  const filteredProducts = onlyLowRes
-    ? products.filter((p: any) => p.needsUpscale)
-    : products;
+  let filteredProducts = products;
+  if (hideEmpty) {
+    filteredProducts = filteredProducts.filter((p: any) => p.imageCount > 0);
+  }
+  if (onlyLowRes) {
+    filteredProducts = filteredProducts.filter((p: any) => p.needsUpscale);
+  }
 
   const selectedResources = filteredProducts
     .filter((p: any) => persistedSelection.has(p.id))
@@ -338,11 +343,18 @@ export default function ImagesPage() {
         <Card>
           <BlockStack gap="300">
             <Text as="h2" variant="headingLg">📦 Prodotti</Text>
-            <Checkbox
-              label="🔴 Mostra solo immagini < 1000px (questa pagina)"
-              checked={onlyLowRes}
-              onChange={setOnlyLowRes}
-            />
+            <InlineStack gap="400" wrap>
+              <Checkbox
+                label="📸 Solo prodotti con almeno 1 immagine"
+                checked={hideEmpty}
+                onChange={setHideEmpty}
+              />
+              <Checkbox
+                label="🔴 Solo immagini < 1000px (questa pagina)"
+                checked={onlyLowRes}
+                onChange={setOnlyLowRes}
+              />
+            </InlineStack>
             <InlineStack align="space-between" blockAlign="center">
               <Text as="p" variant="bodyMd" tone="subdued">Mostrando {filteredProducts.length} prodotti</Text>
               <InlineStack gap="200">
