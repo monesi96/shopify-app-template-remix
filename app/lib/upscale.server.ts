@@ -1,6 +1,6 @@
 import Replicate from "replicate";
 
-const PRODUCTS_PER_PAGE = 50;
+const PRODUCTS_PER_PAGE = 250;
 
 export async function loadProductsWithImages(admin: any, cursor: string | null, direction: string) {
   let query: string;
