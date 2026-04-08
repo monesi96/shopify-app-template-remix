@@ -127,13 +127,15 @@ export async function upscaleImages(products: any[], scale: number, model: strin
         if (model === "clarity") {
           modelId = "philz1337x/clarity-upscaler:dfad41707589d68ecdccd1dfa600d55a208f9310748e44bfe35b4a6291453d5e";
           modelInput = {
-            image: img.url,
+            image: imageUrlForUpscale,
             scale_factor: scale,
-            dynamic: 6,
-            creativity: 0.35,
-            resemblance: 0.6,
-            sharpen: 0,
-            num_inference_steps: 18,
+            dynamic: 8,
+            creativity: 0.5,
+            resemblance: 1.5,
+            sharpen: 2,
+            num_inference_steps: 30,
+            handfix: "disabled",
+            output_format: "png",
           };
         } else {
           // Default: SwinIR
