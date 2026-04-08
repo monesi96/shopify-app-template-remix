@@ -1,4 +1,5 @@
 import prisma from "../db.server";
+import { processPipeline, PipelineOperation } from "./image-suite.server";
 
 const CHUNK_SIZE = 5;
 
@@ -284,9 +285,10 @@ export async function processChunk(jobId: string) {
     });
   }
 
-  // Processa il chunk in parallelo
+  // Processa il chunk in parallelo (in base al tipo di job)
+  const processor = job.type === "images" ? processImageItem : processDescriptionItem;
   const results = await Promise.all(
-    chunk.map((item: any) => processDescriptionItem(item, settings))
+    chunk.map((item: any) => processor(item, settings))
   );
 
   const newSuccess = results.filter((r) => r.status === "success").length;
@@ -304,5 +306,41 @@ export async function processChunk(jobId: string) {
     done: endIdx >= allItems.length,
     processed: endIdx,
     total: allItems.length,
+  };
+}
+
+
+// ── PROCESSA UN PRODOTTO/IMMAGINE PER PIPELINE ──────────────
+export async function processImageItem(product: any, settings: any): Promise<any> {
+  const operations: PipelineOperation[] = settings.operations || [];
+  const productResults: any[] = [];
+
+  for (const img of (product.images || [])) {
+    try {
+      const { finalUrl, steps } = await processPipeline(img.url, operations);
+      productResults.push({
+        originalUrl: img.url,
+        finalUrl,
+        steps,
+        mediaId: img.mediaId,
+        originalWidth: img.width,
+        originalHeight: img.height,
+        status: "success",
+      });
+    } catch (err: any) {
+      productResults.push({
+        originalUrl: img.url,
+        mediaId: img.mediaId,
+        status: "error",
+        error: err.message,
+      });
+    }
+  }
+
+  return {
+    productId: product.id,
+    title: product.title,
+    images: productResults,
+    status: productResults.some((r: any) => r.status === "success") ? "success" : "error",
   };
 }

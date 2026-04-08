@@ -60,6 +60,8 @@ export default function ImagesPage() {
   const [results, setResults] = useState<any[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isReplacing, setIsReplacing] = useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<any>(null);
 
   let filteredProducts = products;
   if (hideEmpty) {
@@ -121,6 +123,28 @@ export default function ImagesPage() {
     return ops;
   };
 
+  // Polling stato job ogni 2 secondi
+  useEffect(() => {
+    if (!activeJobId) return;
+    const interval = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/jobs/${activeJobId}`);
+        const d = await r.json();
+        setJobStatus(d);
+        if (d.status === "completed" || d.status === "failed" || d.status === "cancelled") {
+          clearInterval(interval);
+          if (d.results && d.results.length > 0) {
+            setResults(d.results);
+          }
+          setActiveJobId(null);
+        }
+      } catch (e) {
+        console.error("Polling error:", e);
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [activeJobId]);
+
   const handleExecute = useCallback(async () => {
     const selected = filteredProducts.filter((p: any) => persistedSelection.has(p.id));
     if (selected.length === 0) return;
@@ -131,25 +155,44 @@ export default function ImagesPage() {
       return;
     }
 
-    setIsProcessing(true);
     try {
-      const fd = new FormData();
-      fd.append("intent", "process");
-      fd.append("products", JSON.stringify(selected));
-      fd.append("operations", JSON.stringify(ops));
+      // 1. Crea il job
+      const createFd = new FormData();
+      createFd.append("type", "images");
+      createFd.append("products", JSON.stringify(selected));
+      createFd.append("settings", JSON.stringify({ operations: ops }));
 
-      const resp = await fetch("/api/image-pipeline", { method: "POST", body: fd });
-      const data = await resp.json();
+      const createResp = await fetch("/api/jobs/create", { method: "POST", body: createFd });
+      const createData = await createResp.json();
 
-      if (data.results) {
-        setResults(data.results);
-      } else if (data.error) {
-        alert("Errore: " + data.error);
+      if (!createData.jobId) {
+        alert("Errore creazione job: " + (createData.error || "unknown"));
+        return;
       }
+
+      setActiveJobId(createData.jobId);
+      setJobStatus({ status: "pending", processedItems: 0, totalItems: selected.length, successCount: 0, errorCount: 0 });
+
+      // 2. Avvia processing in background
+      const processLoop = async (jobId: string) => {
+        let done = false;
+        while (!done) {
+          const fd = new FormData();
+          fd.append("jobId", jobId);
+          try {
+            const r = await fetch("/api/jobs/process", { method: "POST", body: fd });
+            const d = await r.json();
+            done = d.done;
+            if (!done) await new Promise((res) => setTimeout(res, 500));
+          } catch (e) {
+            console.error("Process error:", e);
+            done = true;
+          }
+        }
+      };
+      processLoop(createData.jobId);
     } catch (e: any) {
       alert("Errore: " + e.message);
-    } finally {
-      setIsProcessing(false);
     }
   }, [filteredProducts, persistedSelection, opCrop, opRemoveBg, opUpscale, opResize, removeBgReplace, upscaleModel, upscaleScale, resizeSize, resizeBg]);
 
@@ -245,6 +288,27 @@ export default function ImagesPage() {
         </InlineStack>
 
         {/* PIPELINE BUILDER */}
+        {activeJobId && jobStatus && (
+          <Banner tone={jobStatus.status === "failed" ? "critical" : jobStatus.status === "completed" ? "success" : "info"}>
+            <BlockStack gap="200">
+              <Text as="p" variant="bodyMd" fontWeight="bold">
+                {jobStatus.status === "pending" && "⏳ Job in attesa..."}
+                {jobStatus.status === "running" && `🚀 Elaborazione: ${jobStatus.processedItems}/${jobStatus.totalItems}`}
+                {jobStatus.status === "completed" && `✅ Completato! ${jobStatus.successCount} successi, ${jobStatus.errorCount} errori`}
+                {jobStatus.status === "failed" && `❌ Errore: ${jobStatus.errorMessage || "Sconosciuto"}`}
+              </Text>
+              {(jobStatus.status === "running" || jobStatus.status === "pending") && (
+                <div style={{ width: "100%", height: "8px", backgroundColor: "#e0e0e0", borderRadius: "4px", overflow: "hidden" }}>
+                  <div style={{ width: `${jobStatus.totalItems > 0 ? (jobStatus.processedItems / jobStatus.totalItems) * 100 : 0}%`, height: "100%", backgroundColor: "#2CAAD8", transition: "width 0.3s ease" }} />
+                </div>
+              )}
+              <Text as="p" variant="bodySm" tone="subdued">
+                Puoi chiudere la pagina e tornare più tardi — il job continua sul server.
+              </Text>
+            </BlockStack>
+          </Banner>
+        )}
+
         <Card>
           <BlockStack gap="400">
             <Text as="h2" variant="headingLg">⚙️ Pipeline operazioni</Text>
@@ -331,9 +395,9 @@ export default function ImagesPage() {
                 size="large"
                 onClick={handleExecute}
                 loading={isProcessing}
-                disabled={persistedSelection.size === 0}
+                disabled={persistedSelection.size === 0 || activeJobId !== null}
               >
-                {isProcessing ? "Elaborazione in corso..." : `🚀 Esegui pipeline (${persistedSelection.size} prodotti)`}
+                {activeJobId ? "Job in corso..." : `🚀 Esegui pipeline (${persistedSelection.size} prodotti)`}
               </Button>
             </InlineStack>
           </BlockStack>
