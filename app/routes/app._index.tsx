@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData, useFetcher, useSearchParams, useNavigate } from "@remix-run/react";
@@ -531,6 +531,8 @@ export default function Index() {
   const [bulkProducts, setBulkProducts] = useState<any[]>([]);
   const [isLoadingBulk, setIsLoadingBulk] = useState(false);
   const [bulkLoadInfo, setBulkLoadInfo] = useState<string>("");
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<any>(null);
 
   const handleLoadAllMissing = async () => {
     setIsLoadingBulk(true);
@@ -563,22 +565,77 @@ export default function Index() {
     }
   }
 
-  const handleGenerate = useCallback(() => {
-    const selected = products.filter((p: any) => selectedResources.includes(p.id));
+  // Polling dello stato del job ogni 2 secondi
+  useEffect(() => {
+    if (!activeJobId) return;
+    const interval = setInterval(async () => {
+      try {
+        const resp = await fetch(`/api/jobs/${activeJobId}`);
+        const data = await resp.json();
+        setJobStatus(data);
+        if (data.status === "completed" || data.status === "failed" || data.status === "cancelled") {
+          clearInterval(interval);
+          if (data.results && data.results.length > 0) {
+            setGeneratedResults(data.results);
+          }
+          setActiveJobId(null);
+        }
+      } catch (e) {
+        console.error("Polling error:", e);
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [activeJobId]);
+
+  const handleGenerate = useCallback(async () => {
+    const selected = filteredProducts.filter((p: any) => selectedResources.includes(p.id));
     if (selected.length === 0) return;
-    const formData = new FormData();
-    formData.append("intent", "generate");
-    formData.append("products", JSON.stringify(selected));
-    formData.append("tone", tone);
-    formData.append("framework", framework);
-    formData.append("language", language);
-    formData.append("keywords", keywords);
-    formData.append("length", length);
-    formData.append("structure", structure);
-    formData.append("useImage", useImage.toString());
-    formData.append("useBarcode", useBarcode.toString());
-    fetcher.submit(formData, { method: "POST" });
-  }, [selectedResources, products, tone, framework, language, keywords, length, structure, useImage, useBarcode, fetcher]);
+
+    const settings = { tone, framework, language, keywords, length, structure, useImage, useBarcode };
+
+    try {
+      // 1. Crea il job
+      const createFd = new FormData();
+      createFd.append("type", "descriptions");
+      createFd.append("products", JSON.stringify(selected));
+      createFd.append("settings", JSON.stringify(settings));
+
+      const createResp = await fetch("/api/jobs/create", { method: "POST", body: createFd });
+      const createData = await createResp.json();
+
+      if (!createData.jobId) {
+        alert("Errore nella creazione del job: " + (createData.error || "unknown"));
+        return;
+      }
+
+      setActiveJobId(createData.jobId);
+      setJobStatus({ status: "pending", processedItems: 0, totalItems: selected.length, successCount: 0, errorCount: 0 });
+
+      // 2. Avvia il processing in background (fire & forget, si auto-richiama)
+      const processLoop = async (jobId: string) => {
+        let done = false;
+        while (!done) {
+          const processFd = new FormData();
+          processFd.append("jobId", jobId);
+          try {
+            const resp = await fetch("/api/jobs/process", { method: "POST", body: processFd });
+            const data = await resp.json();
+            done = data.done;
+            if (!done) {
+              // Piccola pausa prima del prossimo chunk (per dare respiro al server)
+              await new Promise((r) => setTimeout(r, 500));
+            }
+          } catch (e) {
+            console.error("Process error:", e);
+            done = true;
+          }
+        }
+      };
+      processLoop(createData.jobId);
+    } catch (e: any) {
+      alert("Errore: " + e.message);
+    }
+  }, [selectedResources, filteredProducts, tone, framework, language, keywords, length, structure, useImage, useBarcode]);
 
   const handlePush = useCallback((productId: string, description: string) => {
     const formData = new FormData();
@@ -754,6 +811,33 @@ export default function Index() {
             {activeTab === 0 && (
               <Box padding="400">
                 <BlockStack gap="500">
+                  {activeJobId && jobStatus && (
+                    <Banner tone={jobStatus.status === "failed" ? "critical" : jobStatus.status === "completed" ? "success" : "info"}>
+                      <BlockStack gap="200">
+                        <Text as="p" variant="bodyMd" fontWeight="bold">
+                          {jobStatus.status === "pending" && "⏳ Job in attesa..."}
+                          {jobStatus.status === "running" && `🚀 Generazione in corso: ${jobStatus.processedItems}/${jobStatus.totalItems}`}
+                          {jobStatus.status === "completed" && `✅ Completato! ${jobStatus.successCount} successi, ${jobStatus.errorCount} errori`}
+                          {jobStatus.status === "failed" && `❌ Errore: ${jobStatus.errorMessage || "Sconosciuto"}`}
+                        </Text>
+                        {(jobStatus.status === "running" || jobStatus.status === "pending") && (
+                          <div style={{ width: "100%", height: "8px", backgroundColor: "#e0e0e0", borderRadius: "4px", overflow: "hidden" }}>
+                            <div
+                              style={{
+                                width: `${jobStatus.totalItems > 0 ? (jobStatus.processedItems / jobStatus.totalItems) * 100 : 0}%`,
+                                height: "100%",
+                                backgroundColor: "#2CAAD8",
+                                transition: "width 0.3s ease",
+                              }}
+                            />
+                          </div>
+                        )}
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Puoi chiudere questa pagina, il job continuerà a girare sul server. Torna più tardi per vedere i risultati.
+                        </Text>
+                      </BlockStack>
+                    </Banner>
+                  )}
                   <InlineStack gap="400" wrap={true}>
                     <div style={{ minWidth: "200px", flex: 1 }}>
                       <Select label="Tono di voce" options={toneOptions} value={tone} onChange={setTone} />

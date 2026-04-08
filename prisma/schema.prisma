@@ -32,3 +32,24 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+
+model GenerationJob {
+  id            String   @id @default(cuid())
+  shop          String
+  type          String   // "descriptions" | "images"
+  status        String   // "pending" | "running" | "completed" | "failed" | "cancelled"
+  totalItems    Int      @default(0)
+  processedItems Int     @default(0)
+  successCount  Int      @default(0)
+  errorCount    Int      @default(0)
+  payload       String   @default("")  // JSON con prodotti + impostazioni
+  results       String   @default("")  // JSON con risultati man mano
+  errorMessage  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  completedAt   DateTime?
+
+  @@index([shop, status])
+  @@index([createdAt])
+}
