@@ -109,7 +109,7 @@ export async function loadProductsWithImages(admin: any, cursor: string | null, 
   };
 }
 
-export async function upscaleImages(products: any[], scale: number) {
+export async function upscaleImages(products: any[], scale: number, model: string = "swinir") {
   const replicate = new Replicate({
     auth: process.env.REPLICATE_API_TOKEN,
   });
@@ -121,16 +121,34 @@ export async function upscaleImages(products: any[], scale: number) {
 
     for (const img of product.images) {
       try {
-        const output = await replicate.run(
-          "nightmareai/real-esrgan:f121d640bd286e1fdc67f9799164c1d5be36ff74576ee11c803ae5b665dd46aa",
-          {
-            input: {
-              image: img.url,
-              scale: scale,
-              face_enhance: false,
-            },
-          }
-        );
+        let modelId = "";
+        let modelInput: any = {};
+
+        if (model === "clarity") {
+          modelId = "philz1337x/clarity-upscaler:dfad41707589d68ecdccd1dfa600d55a208f9310748e44bfe35b4a6291453d5e";
+          modelInput = {
+            image: img.url,
+            scale_factor: scale,
+            dynamic: 6,
+            creativity: 0.35,
+            resemblance: 0.6,
+            sharpen: 0,
+            num_inference_steps: 18,
+          };
+        } else {
+          // Default: SwinIR
+          modelId = "jingyunliang/swinir:660d922d33153019e8c263a3bba265de882e7f4f70396546b6c9c8f9d47a021a";
+          modelInput = {
+            image: img.url,
+            task_type: "Real-World Image Super-Resolution-Large",
+            noise: 15,
+            jpeg: 40,
+          };
+        }
+
+        const output = await replicate.run(modelId as `${string}/${string}:${string}`, {
+          input: modelInput,
+        });
 
         const upscaledUrl = typeof output === "string" ? output : String(output);
 

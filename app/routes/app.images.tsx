@@ -40,9 +40,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "upscale") {
     const productsJSON = formData.get("products") as string;
     const scale = parseInt(formData.get("scale") as string) || 4;
+    const model = (formData.get("model") as string) || "swinir";
     const products = JSON.parse(productsJSON);
 
-    const results = await upscaleImages(products, scale);
+    const results = await upscaleImages(products, scale, model);
     return json({ intent: "upscale", results });
   }
 
@@ -65,6 +66,7 @@ export default function ImagesPage() {
   const [searchParams] = useSearchParams();
 
   const [scale, setScale] = useState("4");
+  const [model, setModel] = useState("swinir");
   const [onlyLowRes, setOnlyLowRes] = useState(false);
   const [upscaleResults, setUpscaleResults] = useState<any[]>([]);
 
@@ -90,6 +92,7 @@ export default function ImagesPage() {
     formData.append("intent", "upscale");
     formData.append("products", JSON.stringify(selected));
     formData.append("scale", scale);
+    formData.append("model", model);
     fetcher.submit(formData, { method: "POST" });
   }, [selectedResources, products, scale, fetcher]);
 
@@ -109,6 +112,11 @@ export default function ImagesPage() {
     if (pageInfo.startCursor) navigate(`/app/images?cursor=${encodeURIComponent(pageInfo.startCursor)}&direction=prev`);
   };
   const goToFirstPage = () => navigate(`/app/images`);
+
+  const modelOptions = [
+    { label: "⚡ SwinIR (default, €0.005/foto)", value: "swinir" },
+    { label: "✨ Clarity Pro (qualità top, €0.05/foto)", value: "clarity" },
+  ];
 
   const scaleOptions = [
     { label: "2x (veloce)", value: "2" },
@@ -183,6 +191,9 @@ export default function ImagesPage() {
             <InlineStack gap="400" wrap={true}>
               <div style={{ minWidth: "200px" }}>
                 <Select label="Fattore di ingrandimento" options={scaleOptions} value={scale} onChange={setScale} />
+              </div>
+              <div style={{ minWidth: "260px" }}>
+                <Select label="Modello AI" options={modelOptions} value={model} onChange={setModel} />
               </div>
             </InlineStack>
             <Banner tone="info">
