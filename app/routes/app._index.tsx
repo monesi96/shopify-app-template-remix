@@ -37,8 +37,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const statusFilter = url.searchParams.get("status") || "ACTIVE";
   const direction = url.searchParams.get("direction") || "next";
   const onlyMissing = url.searchParams.get("missing") === "true";
-  const filterQuery = onlyMissing ? '-description:*' : '';
-  console.log('[DEBUG LOADER] onlyMissing:', onlyMissing, 'filterQuery:', filterQuery);
+
+  // Combina filtri: status + missing description
+  const statusQueryMap: Record<string, string> = {
+    ACTIVE: "status:active",
+    DRAFT: "status:draft",
+    ARCHIVED: "status:archived",
+    ALL: "",
+  };
+  const statusQuery = statusQueryMap[statusFilter] || "status:active";
+  const missingQuery = onlyMissing ? "-description:*" : "";
+  const filterQuery = [statusQuery, missingQuery].filter(Boolean).join(" ");
+  console.log('[DEBUG LOADER] status:', statusFilter, 'onlyMissing:', onlyMissing, 'filterQuery:', filterQuery);
 
   let query: string;
 
@@ -158,10 +168,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       })),
   }));
 
+  // Filtro lato client per descrizioni HTML vuote (es. <p></p>, solo whitespace)
+  const finalProducts = onlyMissing
+    ? products.filter((p: any) => {
+        const cleaned = (p.descriptionHtml || p.description || "").replace(/<[^>]+>/g, "").trim();
+        return cleaned.length === 0;
+      })
+    : products;
+
   const pageInfo = responseJson.data.products.pageInfo;
 
   return json({
-    products,
+    products: finalProducts,
     pageInfo,
     totalProducts,
   });
