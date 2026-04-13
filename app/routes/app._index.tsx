@@ -34,6 +34,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
   const cursor = url.searchParams.get("cursor");
+  const statusFilter = url.searchParams.get("status") || "ACTIVE";
   const direction = url.searchParams.get("direction") || "next";
   const onlyMissing = url.searchParams.get("missing") === "true";
   const filterQuery = onlyMissing ? '-description:*' : '';
@@ -936,6 +937,25 @@ export default function Index() {
                       <p>{bulkLoadInfo}</p>
                     </Banner>
                   )}
+                  {/* FILTRO STATUS */}
+                  <InlineStack gap="200" blockAlign="center" wrap>
+                    <Text as="p" variant="bodyMd" tone="subdued">Stato prodotto:</Text>
+                    {["ACTIVE", "DRAFT", "ARCHIVED", "ALL"].map((s) => (
+                      <Button
+                        key={s}
+                        pressed={(searchParams.get("status") || "ACTIVE") === s}
+                        onClick={() => {
+                          const params = new URLSearchParams(searchParams);
+                          params.set("status", s);
+                          params.delete("cursor");
+                          navigate(`/app?${params.toString()}`);
+                        }}
+                      >
+                        {s === "ACTIVE" ? "✅ Attivi" : s === "DRAFT" ? "📝 Bozze" : s === "ARCHIVED" ? "📦 Archiviati" : "🌐 Tutti"}
+                      </Button>
+                    ))}
+                  </InlineStack>
+
                   {/* PAGINAZIONE INFO */}
                   <InlineStack align="space-between" blockAlign="center">
                     <Text as="p" variant="bodyMd" tone="subdued">
