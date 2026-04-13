@@ -18,30 +18,10 @@ function isConnectionError(error: any): boolean {
 }
 
 function createPrismaClient() {
-  const client = new PrismaClient({
+  return new PrismaClient({
     datasourceUrl: process.env.DATABASE_URL,
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });
-
-  client.$use(async (params, next) => {
-    const MAX_RETRIES = 3;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        return await next(params);
-      } catch (error: any) {
-        if (isConnectionError(error) && attempt < MAX_RETRIES) {
-          const delay = Math.pow(2, attempt) * 1000;
-          console.warn(`[DB] ${params.model}.${params.action} - attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
-          await new Promise((r) => setTimeout(r, delay));
-          continue;
-        }
-        throw error;
-      }
-    }
-    throw new Error("Prisma retry middleware: unreachable");
-  });
-
-  return client;
 }
 
 if (process.env.NODE_ENV !== "production") {
