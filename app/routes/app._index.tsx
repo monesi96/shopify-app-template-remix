@@ -774,7 +774,10 @@ export default function Index() {
         </IndexTable.Cell>
         <IndexTable.Cell>{product.vendor}</IndexTable.Cell>
         <IndexTable.Cell>€{product.price}</IndexTable.Cell>
-        <IndexTable.Cell>{product.description && product.description.length > 20 ? <Badge tone="success">Presente</Badge> : <Badge tone="critical">Mancante</Badge>}</IndexTable.Cell>
+        <IndexTable.Cell>{(() => {
+          const cleaned = (product.descriptionHtml || product.description || "").replace(/<[^>]+>/g, "").trim();
+          return cleaned.length > 0 ? <Badge tone="success">Presente</Badge> : <Badge tone="critical">Mancante</Badge>;
+        })()}</IndexTable.Cell>
         <IndexTable.Cell>
           {result ? (
             result.status === "success" ? <Badge tone="success">Generata</Badge> : <Badge tone="critical">Errore</Badge>
