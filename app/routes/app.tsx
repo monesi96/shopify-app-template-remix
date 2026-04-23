@@ -25,6 +25,7 @@ export default function App() {
           Home
         </Link>
         <Link to="/app/images">🖼️ Upscaling Immagini</Link>
+        <Link to="/app/tags">Tags Manager</Link>
       </NavMenu>
       <Outlet />
     </AppProvider>
