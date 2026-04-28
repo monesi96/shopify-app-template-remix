@@ -182,7 +182,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (!anthropicRes.ok) {
       const errText = await anthropicRes.text();
-      console.error("Anthropic error:", anthropicRes.status, errText.slice(0, 500));
+      console.error("=== ANTHROPIC ERROR ===", anthropicRes.status, errText);
       return json({ error: "AI service error: " + anthropicRes.status }, { status: 502, headers: CORS_HEADERS });
     }
 
