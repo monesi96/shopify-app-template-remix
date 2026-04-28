@@ -14,7 +14,7 @@ import {
 } from "../lib/kv-cache.server";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-haiku-4-5";
+const MODEL = "claude-3-5-haiku-20241022";
 const MAX_TOKENS = 1500;
 const MAX_TOOL_ITERATIONS = 4;
 
