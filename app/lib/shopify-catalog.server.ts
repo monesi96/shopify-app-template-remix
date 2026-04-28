@@ -1,5 +1,5 @@
 // app/lib/shopify-catalog.server.ts
-// 32 CONCEPT STORE — Helper Shopify (endpoint PUBBLICI)
+// 32 CONCEPT STORE — Helper Shopify con full-text search
 
 const DEFAULT_STORE = "https://32conceptstore.it";
 
@@ -50,7 +50,7 @@ function mapProduct(raw: any): ShopifyProduct {
     id: String(raw.id || ""),
     handle: String(raw.handle || ""),
     title: String(raw.title || ""),
-    description: stripHtml(raw.body_html || raw.description || "").slice(0, 400),
+    description: stripHtml(raw.body_html || raw.description || "").slice(0, 500),
     vendor: String(raw.vendor || ""),
     productType: String(raw.product_type || ""),
     tags: Array.isArray(raw.tags) ? raw.tags : (raw.tags ? String(raw.tags).split(",").map((t: string) => t.trim()) : []),
@@ -58,51 +58,108 @@ function mapProduct(raw: any): ShopifyProduct {
     compareAtPrice: compareAt ? parseFloat(String(compareAt)).toFixed(2) : undefined,
     available: raw.available !== false,
     imageUrl: image ? (image.startsWith("//") ? "https:" + image : image) : undefined,
-    url: `/products/${raw.handle}`,
+    url: "/products/" + raw.handle,
   };
 }
 
-export async function searchProducts(opts: {
-  query: string;
-  limit?: number;
+export async function loadFullCatalog(): Promise<ShopifyProduct[]> {
+  const allProducts: ShopifyProduct[] = [];
+  const maxPages = 50;
+  let page = 1;
+  let consecutiveEmpty = 0;
+
+  while (page <= maxPages && consecutiveEmpty < 2) {
+    try {
+      const url = getStoreUrl() + "/products.json?limit=250&page=" + page;
+      const res = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!res.ok) break;
+      const data = await res.json();
+      const items = data?.products || [];
+
+      if (items.length === 0) {
+        consecutiveEmpty++;
+        page++;
+        continue;
+      }
+      consecutiveEmpty = 0;
+      const mapped = items.filter((p: any) => p.available !== false).map(mapProduct);
+      allProducts.push(...mapped);
+
+      if (items.length < 250) break;
+      page++;
+    } catch (e) {
+      console.warn("loadFullCatalog page error:", e);
+      break;
+    }
+  }
+
+  console.log("[catalog] Loaded " + allProducts.length + " products from " + page + " pages");
+  return allProducts;
+}
+
+function normalize(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildSearchableText(p: ShopifyProduct): string {
+  return normalize([
+    p.title,
+    p.description,
+    p.vendor,
+    p.productType,
+    ...(p.tags || []),
+  ].join(" "));
+}
+
+export interface SearchOptions {
+  catalog: ShopifyProduct[];
+  queries: string[];
   minPrice?: number;
   maxPrice?: number;
-}): Promise<ShopifyProduct[]> {
-  const { query, limit = 8, minPrice, maxPrice } = opts;
-  if (!query?.trim()) return [];
+  limit?: number;
+}
 
-  const url = `${getStoreUrl()}/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${limit}&resources[options][unavailable_products]=hide`;
+export function searchInCatalog(opts: SearchOptions): ShopifyProduct[] {
+  const { catalog, queries, minPrice, maxPrice, limit = 12 } = opts;
+  if (!catalog?.length || !queries?.length) return [];
 
-  try {
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const items = data?.resources?.results?.products || [];
+  const normalizedQueries = queries
+    .map(q => normalize(q))
+    .filter(q => q.length >= 2);
 
-    let products: ShopifyProduct[] = items.map((p: any) => {
-      const priceStr = String(p.price || "0").replace(/[^\d.,]/g, "").replace(",", ".");
-      return {
-        id: String(p.id || ""),
-        handle: String(p.handle || ""),
-        title: String(p.title || ""),
-        description: stripHtml(p.body || "").slice(0, 400),
-        vendor: String(p.vendor || ""),
-        productType: String(p.product_type || ""),
-        tags: [],
-        price: parseFloat(priceStr || "0").toFixed(2),
-        available: true,
-        imageUrl: p.image ? (p.image.startsWith("//") ? "https:" + p.image : p.image) : undefined,
-        url: p.url || `/products/${p.handle}`,
-      };
-    });
+  if (!normalizedQueries.length) return [];
 
-    if (minPrice != null) products = products.filter((p) => parseFloat(p.price) >= minPrice);
-    if (maxPrice != null) products = products.filter((p) => parseFloat(p.price) <= maxPrice);
-    return products;
-  } catch (e) {
-    console.error("searchProducts error:", e);
-    return [];
+  const scored: Array<{ product: ShopifyProduct; score: number }> = [];
+
+  for (const product of catalog) {
+    if (minPrice != null && parseFloat(product.price) < minPrice) continue;
+    if (maxPrice != null && parseFloat(product.price) > maxPrice) continue;
+
+    const text = buildSearchableText(product);
+    const titleNorm = normalize(product.title);
+    let score = 0;
+
+    for (const q of normalizedQueries) {
+      if (titleNorm.includes(q)) score += 10;
+      if (text.includes(q)) score += 3;
+      const words = q.split(" ").filter(w => w.length >= 3);
+      for (const w of words) {
+        if (titleNorm.includes(w)) score += 2;
+        else if (text.includes(w)) score += 1;
+      }
+    }
+
+    if (score > 0) scored.push({ product, score });
   }
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map(s => s.product);
 }
 
 export async function getCollectionProducts(
@@ -112,7 +169,7 @@ export async function getCollectionProducts(
   if (!handle) return { collection: null, products: [] };
 
   const cap = Math.min(limit, 250);
-  const url = `${getStoreUrl()}/collections/${encodeURIComponent(handle)}/products.json?limit=${cap}`;
+  const url = getStoreUrl() + "/collections/" + encodeURIComponent(handle) + "/products.json?limit=" + cap;
 
   try {
     const res = await fetch(url, { headers: { Accept: "application/json" } });
@@ -125,7 +182,7 @@ export async function getCollectionProducts(
 
     let collection: { title: string; description: string } | null = null;
     try {
-      const collRes = await fetch(`${getStoreUrl()}/collections/${handle}.json`, { headers: { Accept: "application/json" } });
+      const collRes = await fetch(getStoreUrl() + "/collections/" + handle + ".json", { headers: { Accept: "application/json" } });
       if (collRes.ok) {
         const collData = await collRes.json();
         if (collData?.collection) {
@@ -156,49 +213,29 @@ export async function searchInCollection(
   let filtered = products;
 
   if (keyword) {
-    const k = keyword.toLowerCase();
-    filtered = filtered.filter(
-      (p) =>
-        p.title.toLowerCase().includes(k) ||
-        p.description.toLowerCase().includes(k) ||
-        p.vendor.toLowerCase().includes(k) ||
-        p.tags.some((t) => t.toLowerCase().includes(k))
-    );
+    filtered = searchInCatalog({ catalog: products, queries: [keyword], minPrice, maxPrice, limit: 100 });
+  } else {
+    if (minPrice != null) filtered = filtered.filter((p) => parseFloat(p.price) >= minPrice);
+    if (maxPrice != null) filtered = filtered.filter((p) => parseFloat(p.price) <= maxPrice);
   }
-  if (minPrice != null) filtered = filtered.filter((p) => parseFloat(p.price) >= minPrice);
-  if (maxPrice != null) filtered = filtered.filter((p) => parseFloat(p.price) <= maxPrice);
   return filtered.slice(0, limit);
-}
-
-export async function getRandomCatalogSample(count: number = 50): Promise<ShopifyProduct[]> {
-  const allProducts: ShopifyProduct[] = [];
-  const pagesToFetch = [1, 5, 10];
-
-  for (const page of pagesToFetch) {
-    try {
-      const url = `${getStoreUrl()}/products.json?limit=250&page=${page}`;
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const items = data?.products || [];
-      const mapped = items.filter((p: any) => p.available !== false).map(mapProduct);
-      allProducts.push(...mapped);
-      if (items.length < 250) break;
-    } catch (e) {}
-  }
-
-  for (let i = allProducts.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [allProducts[i], allProducts[j]] = [allProducts[j], allProducts[i]];
-  }
-  return allProducts.slice(0, count);
 }
 
 export function compressProductForAI(p: ShopifyProduct): string {
   const desc = p.description.slice(0, 100);
-  return `[${p.handle}] ${p.title} | ${p.vendor || "—"} | €${p.price}${desc ? ` | ${desc}` : ""}`;
+  return "[" + p.handle + "] " + p.title + " | " + (p.vendor || "—") + " | €" + p.price + (desc ? " | " + desc : "");
 }
 
 export function compressProductsForAI(products: ShopifyProduct[]): string {
   return products.map(compressProductForAI).join("\n");
+}
+
+export function getRandomSample(catalog: ShopifyProduct[], count: number = 50): ShopifyProduct[] {
+  if (!catalog?.length) return [];
+  const arr = [...catalog];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr.slice(0, count);
 }
