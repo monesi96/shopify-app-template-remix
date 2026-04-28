@@ -8,7 +8,7 @@ import {
 import { getCachedCollectionPicks } from "../lib/kv-cache.server";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-3-5-haiku-20241022";
+const MODEL = "claude-haiku-4-5-20251001";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
