@@ -1,6 +1,4 @@
 // app/routes/api.gift-finder.collection-picks.tsx
-// 32 CONCEPT STORE — Top Picks AI per Collezione
-
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import {
@@ -38,93 +36,32 @@ async function pickTopProducts(
 
   const productList = products
     .slice(0, 50)
-    .map((p, i) =>
-      `${i + 1}. [${p.handle}] ${p.title} | ${p.vendor || "—"} | €${p.price}${
-        p.description ? " | " + p.description.slice(0, 100) : ""
-      }`
-    )
+    .map((p, i) => {
+      const desc = p.description ? " | " + p.description.slice(0, 100) : "";
+      return (i + 1) + ". [" + p.handle + "] " + p.title + " | " + (p.vendor || "—") + " | €" + p.price + desc;
+    })
     .join("\n");
 
-  const systemPrompt = `Sei un curatore esperto di regali per 32 Concept Store, negozio italiano di design e idee regalo.
+  const systemParts: string[] = [];
+  systemParts.push("Sei un curatore esperto di regali per 32 Concept Store, negozio italiano di design.");
+  systemParts.push("Ti viene data una lista di prodotti di una collezione. Devi scegliere i 6-8 MIGLIORI considerando:");
+  systemParts.push("- Varietà di prezzo (accessibile, medio, pregiato)");
+  systemParts.push("- Varietà di stile (non 6 candele identiche)");
+  systemParts.push("- Probabilità che siano apprezzati come regalo");
+  systemParts.push("- Attrattiva del titolo");
+  systemParts.push("");
+  systemParts.push("Per ogni prodotto scelto, scrivi un motivo BREVE (max 12 parole) accattivante in italiano.");
+  systemParts.push("");
+  systemParts.push("Rispondi SOLO con JSON valido in questo formato esatto:");
+  systemParts.push('{"picks": [{"handle": "candela-vaniglia", "reason": "Profumo caldo, ideale per il salotto"}]}');
+  systemParts.push("");
+  systemParts.push("Includi SOLO handle che esistono nella lista. Massimo 8, minimo 6.");
+  const systemPrompt = systemParts.join("\n");
 
-Ti viene data una lista di prodotti di una collezione. Devi scegliere i **6-8 migliori** considera
-cat > app/routes/api.gift-finder.collection-picks.tsx << 'CLAUDEEOF'
-// app/routes/api.gift-finder.collection-picks.tsx
-// 32 CONCEPT STORE — Top Picks AI per Collezione
-
-import type { LoaderFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
-import {
-  getCollectionProducts,
-  type ShopifyProduct,
-} from "../lib/shopify-catalog.server";
-import { getCachedCollectionPicks } from "../lib/kv-cache.server";
-
-const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-haiku-4-5";
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Max-Age": "86400",
-};
-
-interface AIPick {
-  handle: string;
-  reason: string;
-}
-
-async function pickTopProducts(
-  collectionTitle: string,
-  collectionDesc: string,
-  products: ShopifyProduct[]
-): Promise<AIPick[]> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY missing");
-
-  if (products.length <= 6) {
-    return products.map((p) => ({ handle: p.handle, reason: "" }));
-  }
-
-  const productList = products
-    .slice(0, 50)
-    .map((p, i) =>
-      `${i + 1}. [${p.handle}] ${p.title} | ${p.vendor || "—"} | €${p.price}${
-        p.description ? " | " + p.description.slice(0, 100) : ""
-      }`
-    )
-    .join("\n");
-
-  const systemPrompt = `Sei un curatore esperto di regali per 32 Concept Store, negozio italiano di design e idee regalo.
-
-Ti viene data una lista di prodotti di una collezione. Devi scegliere i **6-8 migliori** considerando:
-- Varietà di prezzo
-- Varietà di stile (non 6 candele identiche)
-- Probabilità che siano apprezzati come regalo
-- Attrattiva visiva e descrittiva del titolo
-
-Per ogni prodotto scelto, scrivi un motivo BREVE (max 12 parole) e accattivante in italiano.
-
-Rispondi SOLO con JSON valido:
-\`\`\`json
-{
-  "picks": [
-    { "handle": "candela-vaniglia", "reason": "Profumo caldo, ideale per il salotto" }
-  ]
-}
-\`\`\`
-
-Includi SOLO handle che esistono nella lista. Massimo 8, minimo 6.`;
-
-  const userPrompt = `Collezione: **${collectionTitle}**${
-    collectionDesc ? "\nDescrizione: " + collectionDesc.slice(0, 200) : ""
-  }
-
-Prodotti disponibili (${products.length}):
-${productList}
-
-Scegli i 6-8 migliori per regalo.`;
+  const userPrompt = "Collezione: " + collectionTitle +
+    (collectionDesc ? "\nDescrizione: " + collectionDesc.slice(0, 200) : "") +
+    "\n\nProdotti disponibili (" + products.length + "):\n" + productList +
+    "\n\nScegli i 6-8 migliori per regalo.";
 
   const res = await fetch(ANTHROPIC_API_URL, {
     method: "POST",
@@ -143,26 +80,23 @@ Scegli i 6-8 migliori per regalo.`;
 
   if (!res.ok) {
     const t = await res.text();
-    throw new Error(`AI error ${res.status}: ${t.slice(0, 200)}`);
+    throw new Error("AI error " + res.status + ": " + t.slice(0, 200));
   }
 
   const data = await res.json();
   const text = data.content?.[0]?.text || "";
 
-  const fence = text.match(/\`\`\`(?:json)?\s*\n?([\s\S]*?)\n?\`\`\`/);
-  const jsonStr = fence ? fence[1] : text;
-
-  let parsed: any;
+  let parsed: any = null;
   try {
-    parsed = JSON.parse(jsonStr.trim());
+    parsed = JSON.parse(text.trim());
   } catch (e) {
-    const m = jsonStr.match(/\{[\s\S]*\}/);
+    const m = text.match(/\{[\s\S]*\}/);
     if (m) {
       try { parsed = JSON.parse(m[0]); } catch (_) { return []; }
     } else return [];
   }
 
-  if (!Array.isArray(parsed.picks)) return [];
+  if (!parsed || !Array.isArray(parsed.picks)) return [];
 
   const validHandles = new Set(products.map((p) => p.handle));
   return parsed.picks
@@ -182,7 +116,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const handle = url.searchParams.get("handle")?.trim();
   if (!handle) {
-    return json({ error: "Missing 'handle' query param" }, { status: 400, headers: CORS_HEADERS });
+    return json({ error: "Missing handle param" }, { status: 400, headers: CORS_HEADERS });
   }
 
   try {
