@@ -1,49 +1,68 @@
 // app/lib/kv-cache.server.ts
-// 32 CONCEPT STORE — Cache helper Vercel KV
+// 32 CONCEPT STORE — Cache helper Redis (Vercel Marketplace)
 
-import type { ShopifyProduct } from "./shopify-catalog.server";
+let redisClient: any = null;
+let redisAvailable: boolean | null = null;
+let connectPromise: Promise<any> | null = null;
 
-let kvClient: any = null;
-let kvAvailable: boolean | null = null;
+async function getRedis() {
+  if (redisAvailable === false) return null;
+  if (redisClient && redisClient.isReady) return redisClient;
+  if (connectPromise) return connectPromise;
 
-async function getKV() {
-  if (kvAvailable === false) return null;
-  if (kvClient) return kvClient;
-
-  try {
-    if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
-      kvAvailable = false;
-      console.warn("[kv-cache] Vercel KV not configured");
+  connectPromise = (async () => {
+    try {
+      const url = process.env.REDIS_URL || process.env.KV_URL;
+      if (!url) {
+        redisAvailable = false;
+        console.warn("[redis] No REDIS_URL configured");
+        return null;
+      }
+      const mod = await import("redis");
+      const client = mod.createClient({ url });
+      client.on("error", (err: any) => console.error("[redis] error:", err?.message));
+      await client.connect();
+      redisClient = client;
+      redisAvailable = true;
+      console.log("[redis] connected");
+      return client;
+    } catch (e) {
+      console.warn("[redis] connect error:", (e as Error).message);
+      redisAvailable = false;
       return null;
+    } finally {
+      connectPromise = null;
     }
-    const mod = await import("@vercel/kv");
-    kvClient = mod.kv;
-    kvAvailable = true;
-    return kvClient;
-  } catch (e) {
-    console.warn("[kv-cache] @vercel/kv not available:", (e as Error).message);
-    kvAvailable = false;
-    return null;
-  }
+  })();
+
+  return connectPromise;
 }
 
 export async function cacheGet<T = any>(key: string): Promise<T | null> {
-  const kv = await getKV();
-  if (!kv) return null;
+  const r = await getRedis();
+  if (!r) return null;
   try {
-    const v = await kv.get(key);
-    return v as T | null;
+    const v = await r.get(key);
+    if (v == null) return null;
+    if (typeof v === "string") {
+      try { return JSON.parse(v) as T; } catch { return v as any; }
+    }
+    return v as T;
   } catch (e) {
+    console.warn("[redis] get error:", (e as Error).message);
     return null;
   }
 }
 
 export async function cacheSet(key: string, value: any, ttlSeconds: number): Promise<void> {
-  const kv = await getKV();
-  if (!kv) return;
+  const r = await getRedis();
+  if (!r) return;
   try {
-    await kv.set(key, value, { ex: ttlSeconds });
-  } catch (e) {}
+    const str = typeof value === "string" ? value : JSON.stringify(value);
+    await r.set(key, str, { EX: ttlSeconds });
+  } catch (e) {
+    console.warn("[redis] set error:", (e as Error).message);
+  }
 }
 
 export function hashKey(s: string): string {
@@ -58,10 +77,8 @@ export function hashKey(s: string): string {
 const RANDOM_SAMPLE_KEY = "gf:random-sample:v1";
 const RANDOM_SAMPLE_TTL = 60 * 60 * 6;
 
-export async function getCachedRandomSample(
-  fetcher: () => Promise<ShopifyProduct[]>
-): Promise<ShopifyProduct[]> {
-  const cached = await cacheGet<ShopifyProduct[]>(RANDOM_SAMPLE_KEY);
+export async function getCachedRandomSample(fetcher: () => Promise<any[]>): Promise<any[]> {
+  const cached = await cacheGet<any[]>(RANDOM_SAMPLE_KEY);
   if (cached && Array.isArray(cached) && cached.length > 0) return cached;
   const fresh = await fetcher();
   await cacheSet(RANDOM_SAMPLE_KEY, fresh, RANDOM_SAMPLE_TTL);
@@ -70,11 +87,8 @@ export async function getCachedRandomSample(
 
 const COLLECTION_PICKS_TTL = 60 * 60 * 6;
 
-export async function getCachedCollectionPicks<T>(
-  collectionHandle: string,
-  fetcher: () => Promise<T>
-): Promise<T> {
-  const key = `gf:collection-picks:${collectionHandle}:v1`;
+export async function getCachedCollectionPicks<T>(collectionHandle: string, fetcher: () => Promise<T>): Promise<T> {
+  const key = "gf:collection-picks:" + collectionHandle + ":v1";
   const cached = await cacheGet<T>(key);
   if (cached) return cached;
   const fresh = await fetcher();
@@ -84,11 +98,8 @@ export async function getCachedCollectionPicks<T>(
 
 const SEARCH_CACHE_TTL = 60 * 60;
 
-export async function getCachedSearch<T>(
-  searchKey: string,
-  fetcher: () => Promise<T>
-): Promise<T> {
-  const key = `gf:search:${hashKey(searchKey)}:v1`;
+export async function getCachedSearch<T>(searchKey: string, fetcher: () => Promise<T>): Promise<T> {
+  const key = "gf:search:" + hashKey(searchKey) + ":v1";
   const cached = await cacheGet<T>(key);
   if (cached) return cached;
   const fresh = await fetcher();
