@@ -31,7 +31,7 @@ const CONFIG = {
 
   // ── Batch e performance ──────────────────────────────────
   BATCH_SIZE:        50,   // Prodotti per esecuzione (max ~50 per restare nei 6 min di GAS)
-  MAX_PRODUCTS:      2000, // Limite caricamento (metti 0 per nessun limite)
+  MAX_PRODUCTS:      0,    // Limite prodotti da SCANSIONARE (0 = nessun limite, scansiona tutto il catalogo)
 
   // ── Stile delle descrizioni ──────────────────────────────
   // Tono: professional | emotional | technical | luxury | casual | ironic | minimal
@@ -88,6 +88,8 @@ const COL = {
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("🚀 SEO Generator")
+    .addItem("🔧 Test connessione Shopify", "testShopifyConnection")
+    .addSeparator()
     .addItem("1️⃣  Carica prodotti senza descrizione", "loadProductsWithoutDescription")
     .addSeparator()
     .addItem("2️⃣  Genera prossime " + CONFIG.BATCH_SIZE + " descrizioni", "generateNextBatch")
@@ -99,6 +101,53 @@ function onOpen() {
     .addItem("📊 Stato attuale", "showStatus")
     .addItem("🔄 Riprova righe con errore", "retryErrors")
     .addToUi();
+}
+
+// ─────────────────────────────────────────────────────────────
+// TEST CONNESSIONE SHOPIFY
+// Eseguilo PRIMA di tutto per verificare che le credenziali siano ok
+// ─────────────────────────────────────────────────────────────
+function testShopifyConnection() {
+  const ui = SpreadsheetApp.getUi();
+
+  try {
+    // 1. Test connessione base: legge i primi 5 prodotti
+    const url = `https://${CONFIG.SHOP_DOMAIN}/admin/api/${CONFIG.API_VERSION}/products.json?status=active&limit=5&fields=id,title,body_html,status`;
+    const resp = shopifyGet(url);
+
+    if (!resp) {
+      ui.alert("❌ Connessione fallita", "Impossibile raggiungere Shopify.\nControlla SHOP_DOMAIN e ADMIN_API_TOKEN in CONFIG.", ui.ButtonSet.OK);
+      return;
+    }
+
+    const products = resp.data.products || [];
+
+    if (products.length === 0) {
+      ui.alert("⚠️ Connessione OK ma 0 prodotti", "L'API funziona ma non ha restituito prodotti attivi.\nControlla che il negozio abbia prodotti con status=active.", ui.ButtonSet.OK);
+      return;
+    }
+
+    // 2. Analizza i primi 5 prodotti: hanno descrizione o no?
+    const info = products.map(p => {
+      const noText = hasNoText(p.body_html);
+      const charCount = (p.body_html || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/gi, "").trim().length;
+      return `• ${p.title.substring(0, 40)} → ${noText ? "❌ SENZA testo" : "✅ ha testo (" + charCount + " char)"}`;
+    }).join("\n");
+
+    // 3. Conta totale prodotti
+    const countUrl = `https://${CONFIG.SHOP_DOMAIN}/admin/api/${CONFIG.API_VERSION}/products/count.json?status=active`;
+    const countResp = shopifyGet(countUrl);
+    const totalActive = countResp ? (countResp.data.count || "?") : "?";
+
+    ui.alert(
+      "✅ Connessione Shopify OK",
+      `Negozio: ${CONFIG.SHOP_DOMAIN}\nProdotti attivi totali: ${totalActive}\n\nPrimi 5 prodotti (campione):\n${info}\n\nSe vedi prodotti "SENZA testo", lo script funzionerà correttamente.`,
+      ui.ButtonSet.OK
+    );
+
+  } catch (e) {
+    ui.alert("❌ Errore", e.message, ui.ButtonSet.OK);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -124,17 +173,19 @@ function loadProductsWithoutDescription() {
 
   let pageInfo = null;
   let totalLoaded = 0;
+  let totalScanned = 0;
   let row = 2;
-  const maxPages = CONFIG.MAX_PRODUCTS > 0 ? Math.ceil(CONFIG.MAX_PRODUCTS / 250) : 999;
   let page = 0;
 
   do {
-    // Nota: quando c'è page_info, Shopify ignora gli altri parametri di filtro
+    // Nota: quando c'è page_info, Shopify ignora tutti i parametri tranne limit e fields.
+    // L'ordinamento e i filtri vengono mantenuti dal cursore di paginazione.
     let url;
     if (pageInfo) {
-      url = `https://${CONFIG.SHOP_DOMAIN}/admin/api/${CONFIG.API_VERSION}/products.json?page_info=${pageInfo}&limit=250&fields=id,title,vendor,product_type,body_html,variants,images`;
+      url = `https://${CONFIG.SHOP_DOMAIN}/admin/api/${CONFIG.API_VERSION}/products.json?page_info=${pageInfo}&limit=250&fields=id,title,vendor,product_type,body_html,status,variants,images`;
     } else {
-      url = `https://${CONFIG.SHOP_DOMAIN}/admin/api/${CONFIG.API_VERSION}/products.json?status=active&limit=250&fields=id,title,vendor,product_type,body_html,variants,images`;
+      // order=id+desc = prodotti più recenti prima (corrispondente a sortKey: CREATED_AT reverse: true nel GraphQL)
+      url = `https://${CONFIG.SHOP_DOMAIN}/admin/api/${CONFIG.API_VERSION}/products.json?status=active&limit=250&order=id+desc&fields=id,title,vendor,product_type,body_html,status,variants,images`;
     }
 
     const resp = shopifyGet(url);
@@ -142,12 +193,12 @@ function loadProductsWithoutDescription() {
 
     const products = resp.data.products || [];
 
-    // Filtra: solo prodotti senza descrizione reale (anche se HTML vuoto)
+    // Filtra: solo prodotti attivi senza TESTO reale nella descrizione.
+    // Un prodotto "senza testo" è quello la cui body_html contiene solo tag HTML
+    // (es. solo <img>, solo <p></p>, solo &nbsp;, ecc.) senza parole leggibili.
     const missing = products.filter(p => {
-      // Salta prodotti non attivi (nelle pagine paginate status non è filtrato)
       if (p.status && p.status !== "active") return false;
-      const clean = (p.body_html || "").replace(/<[^>]+>/g, "").trim();
-      return clean.length === 0;
+      return hasNoText(p.body_html);
     });
 
     if (missing.length > 0) {
@@ -170,13 +221,15 @@ function loadProductsWithoutDescription() {
     // Estrai page_info per la pagina successiva
     pageInfo = resp.nextPageInfo;
     page++;
+    totalScanned += products.length;
 
     // Rispetta i rate limit Shopify (max 2 req/s in REST)
     Utilities.sleep(500);
 
-    if (CONFIG.MAX_PRODUCTS > 0 && totalLoaded >= CONFIG.MAX_PRODUCTS) break;
+    // Ferma se abbiamo scansionato abbastanza prodotti (0 = nessun limite)
+    if (CONFIG.MAX_PRODUCTS > 0 && totalScanned >= CONFIG.MAX_PRODUCTS) break;
 
-  } while (pageInfo && page < maxPages);
+  } while (pageInfo);
 
   // Colora le righe "Da generare" in giallo
   if (row > 2) {
@@ -742,6 +795,22 @@ function callClaudeRaw(body) {
 // Utility log
 function log(msg) {
   Logger.log(msg);
+}
+
+// Restituisce true se html non contiene testo leggibile
+// (gestisce: tag HTML, &nbsp;, entità HTML, whitespace, solo immagini)
+function hasNoText(html) {
+  if (!html) return true;
+  const text = html
+    .replace(/<[^>]+>/g, " ")   // rimuove tutti i tag HTML (compreso <img>)
+    .replace(/&nbsp;/gi, " ")   // &nbsp; → spazio
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#?\w+;/g, " ")   // altre entità HTML
+    .replace(/\s+/g, " ")       // collassa whitespace multiplo
+    .trim();
+  return text.length === 0;
 }
 
 // Crea o recupera il foglio di lavoro
