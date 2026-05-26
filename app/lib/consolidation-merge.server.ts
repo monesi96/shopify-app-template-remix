@@ -218,7 +218,8 @@ export async function executeMerge(
       }`, { productId: masterProductId, options: optionsInput, strategy: "LEAVE_AS_IS" });
     if (pushErrors(result.errors, oc.productOptionsCreate?.userErrors, "opzioni")) { result.errors.push("Creazione opzioni fallita: interrotto (nessuna variante creata, nessun prodotto archiviato)."); return result; }
 
-    // 3) Align the master's existing variant (option values + its photo) — best effort
+    // 3) Align the master's existing variant's option values. Its photo is
+    // already the product image, so we don't re-add it (avoids duplicate media).
     if (masterVariant && masterPlan) {
       const mu = await gql(admin, `
         mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
@@ -228,20 +229,21 @@ export async function executeMerge(
         variants: [{
           id: masterVariant.id,
           optionValues: masterPlan.optionValues.map((o) => ({ optionName: o.name, name: o.value })),
-          ...(masterPlan.imageUrl ? { mediaSrc: [masterPlan.imageUrl] } : {}),
         }],
       });
       pushErrors(result.warnings, mu.productVariantsBulkUpdate?.userErrors, "variante master");
     }
 
-    // 4) Create the slave variants (SKU + EAN + price + photo per variant)
+    // 4) Create the slave variants (SKU + EAN + price; per-variant photo only
+    // when the images actually differ — otherwise the single product image is fine)
     const slaves = plan.variants.filter((v) => !v.isMaster);
+    const imagesVary = new Set(plan.variants.map((v) => v.imageUrl).filter(Boolean)).size > 1;
     const variantsInput = slaves.map((v) => ({
       optionValues: v.optionValues.map((o) => ({ optionName: o.name, name: o.value })),
       price: byId[v.productId]?.variants?.nodes?.[0]?.price,
       ...(v.barcode ? { barcode: v.barcode } : {}),
       inventoryItem: { sku: v.sku || undefined },
-      ...(v.imageUrl ? { mediaSrc: [v.imageUrl] } : {}),
+      ...(imagesVary && v.imageUrl ? { mediaSrc: [v.imageUrl] } : {}),
     }));
     const bc = await gql(admin, `
       mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {

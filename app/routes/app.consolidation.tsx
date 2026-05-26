@@ -17,6 +17,7 @@ export default function Consolidation() {
   const scanFetcher = useFetcher<{ scanId: number }>();
   const procFetcher = useFetcher<any>();
   const cancelFetcher = useFetcher<{ ok?: boolean }>();
+  const checkFetcher = useFetcher<any>();
   const revalidator = useRevalidator();
   const [vendor, setVendor] = useState("");
   const running = scan?.status === "queued" || scan?.status === "running";
@@ -64,6 +65,16 @@ export default function Consolidation() {
                 <Text as="span" tone="subdued">
                   Ultima scansione: {scan.status} · {scan.totalScanned} prodotti
                 </Text>
+              )}
+            </InlineStack>
+            <InlineStack gap="300" align="start" blockAlign="center">
+              <Button onClick={() => checkFetcher.load("/api/consolidation/check-inventory")} loading={checkFetcher.state !== "idle"}>
+                Verifica accesso inventario
+              </Button>
+              {checkFetcher.data && (
+                checkFetcher.data.ok
+                  ? <Text as="span" tone="success">Inventario OK · Location: {checkFetcher.data.location?.name || checkFetcher.data.location?.id}</Text>
+                  : <Text as="span" tone="critical">Non accessibile: {checkFetcher.data.error}</Text>
               )}
             </InlineStack>
           </BlockStack>
