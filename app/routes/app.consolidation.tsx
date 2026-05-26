@@ -16,6 +16,7 @@ export default function Consolidation() {
   const { groups, scan } = useLoaderData<typeof loader>();
   const scanFetcher = useFetcher<{ scanId: number }>();
   const procFetcher = useFetcher<any>();
+  const ignoreFetcher = useFetcher<{ ok?: boolean }>();
   const revalidator = useRevalidator();
   const [vendor, setVendor] = useState("");
   const running = scan?.status === "queued" || scan?.status === "running";
@@ -36,6 +37,11 @@ export default function Consolidation() {
       revalidator.revalidate();
     }
   }, [procFetcher.data]);
+
+  // Dopo aver ignorato un gruppo, ricarica la lista (il gruppo sparisce)
+  useEffect(() => {
+    if (ignoreFetcher.data?.ok) revalidator.revalidate();
+  }, [ignoreFetcher.data]);
 
   const startScan = () => scanFetcher.submit({ vendor }, { method: "post", action: "/api/consolidation/scan" });
 
@@ -70,9 +76,17 @@ export default function Consolidation() {
             <BlockStack gap="300">
               <InlineStack align="space-between">
                 <Text as="h3" variant="headingMd">{g.vendor} — {g.titleNormalized || "(senza titolo)"}</Text>
-                <InlineStack gap="200">
+                <InlineStack gap="200" blockAlign="center">
                   <Badge tone="info">{`${g.count} prodotti`}</Badge>
                   {g.hashConsistent ? <Badge tone="success">Foto coerenti</Badge> : <Badge tone="warning">Foto divergenti</Badge>}
+                  <Button
+                    variant="plain"
+                    tone="critical"
+                    loading={ignoreFetcher.state !== "idle" && ignoreFetcher.formData?.get("bucketKey") === g.bucketKey}
+                    onClick={() => ignoreFetcher.submit({ bucketKey: g.bucketKey }, { method: "post", action: "/api/consolidation/ignore" })}
+                  >
+                    Ignora
+                  </Button>
                 </InlineStack>
               </InlineStack>
               <BlockStack gap="200">
