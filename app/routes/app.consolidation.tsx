@@ -76,17 +76,20 @@ export default function Consolidation() {
                 </InlineStack>
               </InlineStack>
               <BlockStack gap="200">
-                {g.members.map((m: any) => (
-                  <InlineStack key={m.id} gap="300" blockAlign="center">
-                    <Thumbnail source={m.imageUrl || ""} alt={m.productTitle} size="small" />
-                    <BlockStack gap="050">
-                      <Text as="span" variant="bodyMd">{m.productTitle}</Text>
-                      <Text as="span" tone="subdued" variant="bodySm">
-                        SKU {m.sku || "—"} · Taglia {m.detectedSize || "?"} · Colore {m.detectedColor || "?"}
-                      </Text>
-                    </BlockStack>
-                  </InlineStack>
-                ))}
+                {g.members.map((m: any) => {
+                  const attrs = [m.detectedSize && `Taglia ${m.detectedSize}`, m.detectedColor && `Colore ${m.detectedColor}`].filter(Boolean).join(" · ");
+                  return (
+                    <InlineStack key={m.id} gap="300" blockAlign="center">
+                      <Thumbnail source={m.imageUrl || ""} alt={m.productTitle} size="small" />
+                      <BlockStack gap="050">
+                        <Text as="span" variant="bodyMd">{m.productTitle}</Text>
+                        <Text as="span" tone="subdued" variant="bodySm">
+                          SKU {m.sku || "—"}{attrs ? ` · ${attrs}` : " · nessun attributo rilevato"}
+                        </Text>
+                      </BlockStack>
+                    </InlineStack>
+                  );
+                })}
               </BlockStack>
             </BlockStack>
           </Card>
