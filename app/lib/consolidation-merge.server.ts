@@ -6,6 +6,7 @@ import prisma from "../db.server";
 export type PlanVariant = {
   productId: string;
   sku: string;
+  barcode: string;
   title: string;
   size: string | null;
   color: string | null;
@@ -70,6 +71,7 @@ export async function buildMergePlan(
     return {
       productId: m.productId,
       sku: m.sku || "",
+      barcode: m.barcode || "",
       title: m.productTitle,
       size: m.detectedSize,
       color: m.detectedColor,
