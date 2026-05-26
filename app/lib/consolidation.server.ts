@@ -46,10 +46,10 @@ export function hammingDistanceHex(a: string, b: string): number {
 
 // ── Dizionari taglia/colore ──
 const SIZE_WORDS = ["XXXL", "XXL", "3XL", "2XL", "XXS", "XS", "XL", "S", "M", "L"];
-const MULTIWORD_COLORS = ["brilliant blue", "dark brown", "light blue"];
+const MULTIWORD_COLORS = ["brilliant blue", "navy blue", "dark brown", "light blue"];
 const COLOR_MAP: Record<string, string> = {
   nero: "Nero", black: "Nero", bianco: "Bianco", white: "Bianco",
-  rosso: "Rosso", red: "Rosso", blu: "Blu", blue: "Blu", navy: "Blu",
+  rosso: "Rosso", red: "Rosso", blu: "Blu", blue: "Blu", navy: "Blu Navy", "navy blue": "Blu Navy",
   "brilliant blue": "Brilliant Blue", "light blue": "Azzurro", verde: "Verde", green: "Verde",
   giallo: "Giallo", yellow: "Giallo", rosa: "Rosa", pink: "Rosa",
   grigio: "Grigio", grey: "Grigio", gray: "Grigio",
@@ -65,7 +65,11 @@ export function collapseRepeats(s: string): string {
 }
 
 export function detectSize(title: string): string | null {
-  const t = " " + collapseRepeats(title).toUpperCase().replace(/[.,]/g, " ") + " ";
+  // Tolgo gli apostrofi (così "M'AMA" non genera una falsa taglia "M") e la punteggiatura.
+  const t = " " + collapseRepeats(title).toUpperCase().replace(/['’]/g, "").replace(/[.,]/g, " ") + " ";
+  // I centimetri (es. piatti "18 CM", "26 CM") sono la taglia: vanno rilevati per primi.
+  const cm = t.match(/\b(\d{1,3})\s*CM\b/);
+  if (cm) return `${cm[1]} cm`;
   const range = t.match(/\b(\d{2})\s*-\s*(\d{2})\b/);
   if (range) return `${range[1]}-${range[2]}`;
   const single = t.match(/\b(3[5-9]|4[0-8])\b/);
