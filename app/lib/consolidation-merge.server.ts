@@ -181,6 +181,18 @@ export async function executeMerge(
       combos.add(c);
     }
 
+    // Pre-flight: l'inventario è obbligatorio (altrimenti si perde stock).
+    // Se non è accessibile (scope mancanti), interrompo PRIMA di ogni modifica.
+    let locationId: string | undefined;
+    try {
+      const loc = await gql(admin, `{ locations(first: 1) { nodes { id } } }`);
+      locationId = loc.locations?.nodes?.[0]?.id;
+    } catch (e: any) {
+      result.errors.push(`Inventario non accessibile (${e.message}). Aggiungi all'app gli scope read_locations, read_inventory, write_inventory e ri-autorizza, poi riprova. NESSUNA modifica effettuata.`);
+      return result;
+    }
+    if (!locationId) { result.errors.push("Nessuna location trovata: impossibile trasferire le giacenze. Nessuna modifica effettuata."); return result; }
+
     const fresh = await gql(admin, FRESH_QUERY, { ids: plan.variants.map((v) => v.productId) });
     const byId: Record<string, any> = {};
     for (const n of fresh.nodes || []) if (n?.id) byId[n.id] = n;
@@ -242,29 +254,26 @@ export async function executeMerge(
     const created: any[] = bc.productVariantsBulkCreate?.productVariants || [];
     result.createdVariants = created.length;
 
-    // 5) Transfer inventory (best effort; needs read_locations/read_inventory/write_inventory)
+    // 5) Trasferisce le giacenze per variante (location già verificata sopra)
+    let inventoryTransferred = false;
     try {
-      const loc = await gql(admin, `{ locations(first: 1) { nodes { id } } }`);
-      const locationId: string | undefined = loc.locations?.nodes?.[0]?.id;
-      if (!locationId) {
-        result.warnings.push("Giacenze non trasferite: nessuna location accessibile.");
+      const invq = await gql(admin, `query($ids: [ID!]!){ nodes(ids: $ids){ ... on Product { id variants(first: 1){ nodes { sku inventoryQuantity inventoryItem { id } } } } } }`, { ids: plan.variants.map((v) => v.productId) });
+      const invById: Record<string, any> = {};
+      for (const n of invq.nodes || []) if (n?.id) invById[n.id] = n?.variants?.nodes?.[0];
+      const quantities: any[] = [];
+      const masterInv = invById[masterProductId];
+      if (masterInv?.inventoryItem?.id && masterInv?.inventoryQuantity != null) quantities.push({ inventoryItemId: masterInv.inventoryItem.id, locationId, quantity: masterInv.inventoryQuantity });
+      const qtyBySku: Record<string, number> = {};
+      for (const v of slaves) { if (v.sku) qtyBySku[v.sku] = invById[v.productId]?.inventoryQuantity ?? 0; }
+      for (const cv of created) { const q = qtyBySku[cv.sku]; if (cv.inventoryItem?.id && q != null) quantities.push({ inventoryItemId: cv.inventoryItem.id, locationId, quantity: q }); }
+      if (quantities.length) {
+        const inv = await gql(admin, `mutation($input: InventorySetQuantitiesInput!){ inventorySetQuantities(input: $input){ userErrors { field message } } }`, { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities } });
+        inventoryTransferred = !pushErrors(result.errors, inv.inventorySetQuantities?.userErrors, "giacenze");
       } else {
-        const invq = await gql(admin, `query($ids: [ID!]!){ nodes(ids: $ids){ ... on Product { id variants(first: 1){ nodes { sku inventoryQuantity inventoryItem { id } } } } } }`, { ids: plan.variants.map((v) => v.productId) });
-        const invById: Record<string, any> = {};
-        for (const n of invq.nodes || []) if (n?.id) invById[n.id] = n?.variants?.nodes?.[0];
-        const quantities: any[] = [];
-        const masterInv = invById[masterProductId];
-        if (masterInv?.inventoryItem?.id && masterInv?.inventoryQuantity != null) quantities.push({ inventoryItemId: masterInv.inventoryItem.id, locationId, quantity: masterInv.inventoryQuantity });
-        const qtyBySku: Record<string, number> = {};
-        for (const v of slaves) { if (v.sku) qtyBySku[v.sku] = invById[v.productId]?.inventoryQuantity ?? 0; }
-        for (const cv of created) { const q = qtyBySku[cv.sku]; if (cv.inventoryItem?.id && q != null) quantities.push({ inventoryItemId: cv.inventoryItem.id, locationId, quantity: q }); }
-        if (quantities.length) {
-          const inv = await gql(admin, `mutation($input: InventorySetQuantitiesInput!){ inventorySetQuantities(input: $input){ userErrors { field message } } }`, { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities } });
-          pushErrors(result.warnings, inv.inventorySetQuantities?.userErrors, "giacenze");
-        }
+        inventoryTransferred = true; // nessuna giacenza da trasferire
       }
     } catch (e: any) {
-      result.warnings.push(`Giacenze non trasferite (${e.message}). Per abilitarle aggiungi all'app gli scope read_locations, read_inventory, write_inventory e ri-autorizza.`);
+      result.errors.push(`Trasferimento giacenze fallito (${e.message}).`);
     }
 
     // 6) Audit mapping metafield danea.sku_mapping (best effort)
@@ -277,10 +286,14 @@ export async function executeMerge(
       }`, { metafields: [{ ownerId: masterProductId, namespace: "danea", key: "sku_mapping", type: "json", value: JSON.stringify(mapping) }] });
     pushErrors(result.warnings, mf.metafieldsSet?.userErrors, "metafield");
 
-    // 7) Archive the slave products
-    for (const pid of plan.archiveProductIds) {
-      const a = await gql(admin, `mutation($input: ProductInput!){ productUpdate(input:$input){ userErrors{ field message } } }`, { input: { id: pid, status: "ARCHIVED" } });
-      if (!pushErrors(result.errors, a.productUpdate?.userErrors, `archivio ${pid}`)) result.archived++;
+    // 7) Archivia gli slave SOLO se le giacenze sono state trasferite (così non resta stock intrappolato)
+    if (inventoryTransferred) {
+      for (const pid of plan.archiveProductIds) {
+        const a = await gql(admin, `mutation($input: ProductInput!){ productUpdate(input:$input){ userErrors{ field message } } }`, { input: { id: pid, status: "ARCHIVED" } });
+        if (!pushErrors(result.errors, a.productUpdate?.userErrors, `archivio ${pid}`)) result.archived++;
+      }
+    } else {
+      result.warnings.push("Slave NON archiviati: giacenze non trasferite, lascio attivi gli originali per non perdere stock. Sistema le giacenze e archivia a mano, oppure rimuovi le varianti create.");
     }
 
     // 8) Mark candidates merged
