@@ -255,6 +255,18 @@ export async function executeMerge(
     const created: any[] = bc.productVariantsBulkCreate?.productVariants || [];
     result.createdVariants = created.length;
 
+    // 4a) Explicitly set each created variant's EAN/barcode (reliable path,
+    // not relying only on the create input). Needs the EAN in the scan data.
+    const barcodeUpdates: { id: string; barcode: string }[] = [];
+    for (const cv of created) {
+      const src = slaves.find((s) => s.sku === cv.sku);
+      if (cv.id && src?.barcode) barcodeUpdates.push({ id: cv.id, barcode: src.barcode });
+    }
+    if (barcodeUpdates.length) {
+      const bu = await gql(admin, `mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!){ productVariantsBulkUpdate(productId: $productId, variants: $variants){ userErrors { field message } } }`, { productId: masterProductId, variants: barcodeUpdates });
+      pushErrors(result.warnings, bu.productVariantsBulkUpdate?.userErrors, "EAN varianti");
+    }
+
     // 4b) Attach a per-variant image when images differ: create the media on the
     // product, wait until READY, then link each variant to its media id.
     if (imagesVary) {
