@@ -23,7 +23,7 @@ async function adminQuery<T = any>(admin: AdminClient, query: string, variables:
 
 // ── dHash 64-bit via sharp (robusto a 1 o 3 canali) ──
 export async function computeImageHash(imageUrl: string): Promise<string> {
-  const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(5000) });
+  const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(3000) });
   if (!resp.ok) throw new Error(`image fetch ${resp.status}`);
   const inputBuf = Buffer.from(await resp.arrayBuffer());
   const W = 9, H = 8;
@@ -101,7 +101,7 @@ export async function createScan(shop: string, vendorFilter?: string): Promise<n
   return scan.id;
 }
 
-export async function processScanBatch(admin: AdminClient, scanId: number, maxRuntimeMs = 50 * 1000): Promise<{ done: boolean; scanned: number }> {
+export async function processScanBatch(admin: AdminClient, scanId: number, maxRuntimeMs = 40 * 1000): Promise<{ done: boolean; scanned: number }> {
   const start = Date.now();
   const scan = await prisma.consolidationScan.findUnique({ where: { id: scanId } });
   if (!scan) throw new Error(`scan ${scanId} not found`);
@@ -115,7 +115,7 @@ export async function processScanBatch(admin: AdminClient, scanId: number, maxRu
     query($cursor: String, $q: String!) {
       products(first: ${PRODUCTS_PER_PAGE}, after: $cursor, query: $q) {
         pageInfo { hasNextPage endCursor }
-        edges { node {
+        edges { cursor node {
           id title vendor productType status
           featuredImage { url }
           variants(first: 1) { edges { node { sku price inventoryQuantity barcode } } }
@@ -125,10 +125,12 @@ export async function processScanBatch(admin: AdminClient, scanId: number, maxRu
   let cursor = scan.cursor || null;
   let scannedThisRun = 0;
   let hasNext = true;
-  while (hasNext) {
-    if (Date.now() - start > maxRuntimeMs) {
-      await prisma.consolidationScan.update({ where: { id: scanId }, data: { cursor, totalScanned: scan.totalScanned + scannedThisRun } });
-      return { done: false, scanned: scannedThisRun };
+  let timedOut = false;
+  while (hasNext && !timedOut) {
+    // Se nel frattempo la scansione è stata fermata, esci subito.
+    const fresh = await prisma.consolidationScan.findUnique({ where: { id: scanId }, select: { status: true } });
+    if (!fresh || (fresh.status !== "running" && fresh.status !== "queued")) {
+      return { done: true, scanned: scannedThisRun };
     }
     const data: any = await adminQuery(admin, PRODUCTS_QUERY, { cursor, q: queryStr });
     const conn = data.products;
@@ -146,10 +148,19 @@ export async function processScanBatch(admin: AdminClient, scanId: number, maxRu
         update: { productTitle: n.title || "", vendor: n.vendor || "", productType: n.productType || "", sku: v0.sku || "", imageUrl, imageHash, titleNormalized: titleNorm, detectedSize: detectSize(n.title || ""), detectedColor: detectColor(n.title || ""), bucketKey: key, scannedAt: new Date() },
       });
       scannedThisRun++;
+      cursor = edge.cursor; // checkpoint a livello di singolo prodotto: il progresso non si perde mai
+      if (Date.now() - start > maxRuntimeMs) { timedOut = true; break; }
     }
-    cursor = conn.pageInfo.endCursor;
-    hasNext = conn.pageInfo.hasNextPage;
-    await new Promise((r) => setTimeout(r, 350)); // margine rate-limit Shopify
+    if (!timedOut) {
+      cursor = conn.pageInfo.endCursor;
+      hasNext = conn.pageInfo.hasNextPage;
+      await prisma.consolidationScan.update({ where: { id: scanId }, data: { cursor, totalScanned: scan.totalScanned + scannedThisRun } });
+      if (hasNext) await new Promise((r) => setTimeout(r, 200)); // margine rate-limit Shopify
+    }
+  }
+  if (timedOut) {
+    await prisma.consolidationScan.update({ where: { id: scanId }, data: { cursor, totalScanned: scan.totalScanned + scannedThisRun } });
+    return { done: false, scanned: scannedThisRun };
   }
   await prisma.consolidationScan.update({ where: { id: scanId }, data: { status: "completed", completedAt: new Date(), cursor, totalScanned: scan.totalScanned + scannedThisRun } });
   return { done: true, scanned: scannedThisRun };
@@ -184,6 +195,18 @@ export async function ignoreGroup(shop: string, bucketKey: string): Promise<numb
   const res = await prisma.consolidationCandidate.updateMany({
     where: { shop, bucketKey, status: "pending" },
     data: { status: "rejected" },
+  });
+  return res.count;
+}
+
+// Ferma una scansione bloccata/in corso: la porta in stato terminale così non
+// viene più ripresa dal worker e la UI si sblocca.
+export async function cancelScan(shop: string, scanId?: number): Promise<number> {
+  const res = await prisma.consolidationScan.updateMany({
+    where: scanId
+      ? { id: scanId, shop, status: { in: ["queued", "running"] } }
+      : { shop, status: { in: ["queued", "running"] } },
+    data: { status: "cancelled", completedAt: new Date() },
   });
   return res.count;
 }
