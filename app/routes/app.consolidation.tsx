@@ -21,14 +21,12 @@ export default function Consolidation() {
   const [vendor, setVendor] = useState("");
   const running = scan?.status === "queued" || scan?.status === "running";
 
-  // Avvia scansione -> appena ho lo scanId, inizia a triggerare il worker
   useEffect(() => {
     if (scanFetcher.data?.scanId) {
       procFetcher.submit({ scanId: scanFetcher.data.scanId }, { method: "post", action: "/api/consolidation/process", encType: "application/json" });
     }
   }, [scanFetcher.data]);
 
-  // Re-trigger finché il batch non è done, poi revalida la pagina
   useEffect(() => {
     const r = procFetcher.data?.results?.[0];
     if (r && r.done === false) {
@@ -38,7 +36,6 @@ export default function Consolidation() {
     }
   }, [procFetcher.data]);
 
-  // Dopo aver fermato la scansione, ricarica lo stato
   useEffect(() => {
     if (cancelFetcher.data?.ok) revalidator.revalidate();
   }, [cancelFetcher.data]);
@@ -91,26 +88,45 @@ export default function Consolidation() {
 
 function MergeGroup({ group, onChanged }: { group: any; onChanged: () => void }) {
   const planFetcher = useFetcher<any>();
+  const execFetcher = useFetcher<any>();
   const ignoreFetcher = useFetcher<{ ok?: boolean }>();
   const [selected, setSelected] = useState<Record<string, boolean>>(
     () => Object.fromEntries(group.members.map((m: any) => [m.productId, true])),
   );
   const [masterId, setMasterId] = useState<string>(group.members[0]?.productId || "");
   const [photoUrl, setPhotoUrl] = useState<string>(group.members[0]?.imageUrl || "");
+  const [masterTitle, setMasterTitle] = useState<string>("");
+  const [overrides, setOverrides] = useState<Record<string, { size: string; color: string }>>(
+    () => Object.fromEntries(group.members.map((m: any) => [m.productId, { size: m.detectedSize || "", color: m.detectedColor || "" }])),
+  );
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     if (ignoreFetcher.data?.ok) onChanged();
   }, [ignoreFetcher.data]);
 
+  useEffect(() => {
+    if (execFetcher.data?.result?.ok) onChanged();
+  }, [execFetcher.data]);
+
   const selectedIds = group.members.filter((m: any) => selected[m.productId]).map((m: any) => m.productId);
   const effectiveMaster = selected[masterId] ? masterId : selectedIds[0];
   const plan = planFetcher.data?.plan;
+  const execResult = execFetcher.data?.result;
 
-  const preview = () =>
-    planFetcher.submit(
-      { intent: "plan", productIds: selectedIds, masterProductId: effectiveMaster, featuredImageUrl: photoUrl },
-      { method: "post", action: "/api/consolidation/merge", encType: "application/json" },
-    );
+  const payload = () => ({
+    productIds: selectedIds,
+    masterProductId: effectiveMaster,
+    featuredImageUrl: photoUrl,
+    masterTitle,
+    overrides,
+  });
+
+  const preview = () => planFetcher.submit({ intent: "plan", ...payload() }, { method: "post", action: "/api/consolidation/merge", encType: "application/json" });
+  const runMerge = () => {
+    execFetcher.submit({ intent: "execute", ...payload() }, { method: "post", action: "/api/consolidation/merge", encType: "application/json" });
+    setConfirming(false);
+  };
 
   return (
     <Card>
@@ -120,43 +136,43 @@ function MergeGroup({ group, onChanged }: { group: any; onChanged: () => void })
           <InlineStack gap="200" blockAlign="center">
             <Badge tone="info">{`${group.count} prodotti`}</Badge>
             {group.hashConsistent ? <Badge tone="success">Foto coerenti</Badge> : <Badge tone="warning">Foto divergenti</Badge>}
-            <Button
-              variant="plain"
-              tone="critical"
-              loading={ignoreFetcher.state !== "idle"}
-              onClick={() => ignoreFetcher.submit({ bucketKey: group.bucketKey }, { method: "post", action: "/api/consolidation/ignore" })}
-            >
+            <Button variant="plain" tone="critical" loading={ignoreFetcher.state !== "idle"} onClick={() => ignoreFetcher.submit({ bucketKey: group.bucketKey }, { method: "post", action: "/api/consolidation/ignore" })}>
               Ignora
             </Button>
           </InlineStack>
         </InlineStack>
 
         <Text as="p" tone="subdued" variant="bodySm">
-          Spunta i prodotti che sono lo stesso articolo, scegli il master e la foto principale, poi genera l'anteprima.
+          Spunta i prodotti che sono lo stesso articolo, scegli master e foto principale, correggi taglia/colore se serve, poi genera l'anteprima.
         </Text>
 
-        <BlockStack gap="200">
+        <BlockStack gap="300">
           {group.members.map((m: any) => {
-            const attrs = [m.detectedSize && `Taglia ${m.detectedSize}`, m.detectedColor && `Colore ${m.detectedColor}`].filter(Boolean).join(" · ");
             const isSel = !!selected[m.productId];
+            const ov = overrides[m.productId] || { size: "", color: "" };
+            const setOv = (field: "size" | "color", value: string) => setOverrides((o) => ({ ...o, [m.productId]: { ...o[m.productId], [field]: value } }));
             return (
-              <InlineStack key={m.id} gap="300" blockAlign="center">
+              <InlineStack key={m.id} gap="300" blockAlign="start">
                 <Checkbox label="Includi nel merge" labelHidden checked={isSel} onChange={(v) => setSelected((s) => ({ ...s, [m.productId]: v }))} />
                 <Thumbnail source={m.imageUrl || ""} alt={m.productTitle} size="small" />
-                <BlockStack gap="050">
+                <BlockStack gap="100">
                   <Text as="span" variant="bodyMd">{m.productTitle}</Text>
-                  <Text as="span" tone="subdued" variant="bodySm">
-                    SKU {m.sku || "—"}{m.barcode ? ` · EAN ${m.barcode}` : ""}{attrs ? ` · ${attrs}` : " · nessun attributo rilevato"}
-                  </Text>
-                  <InlineStack gap="400">
+                  <Text as="span" tone="subdued" variant="bodySm">SKU {m.sku || "—"}{m.barcode ? ` · EAN ${m.barcode}` : ""}</Text>
+                  <InlineStack gap="200" blockAlign="center">
                     <RadioButton label="Master" checked={masterId === m.productId} disabled={!isSel} name={`master-${group.bucketKey}`} onChange={() => setMasterId(m.productId)} />
                     <RadioButton label="Foto principale" checked={photoUrl === m.imageUrl} disabled={!m.imageUrl} name={`photo-${group.bucketKey}`} onChange={() => setPhotoUrl(m.imageUrl)} />
+                  </InlineStack>
+                  <InlineStack gap="200">
+                    <TextField label="Taglia" labelHidden placeholder="Taglia" value={ov.size} onChange={(v) => setOv("size", v)} autoComplete="off" />
+                    <TextField label="Colore" labelHidden placeholder="Colore" value={ov.color} onChange={(v) => setOv("color", v)} autoComplete="off" />
                   </InlineStack>
                 </BlockStack>
               </InlineStack>
             );
           })}
         </BlockStack>
+
+        <TextField label="Titolo del prodotto unificato" placeholder="(lascia vuoto per tenere il titolo del master)" helpText="Usalo per togliere taglia/colore dal titolo." value={masterTitle} onChange={setMasterTitle} autoComplete="off" />
 
         <InlineStack gap="300">
           <Button onClick={preview} disabled={selectedIds.length < 2} loading={planFetcher.state !== "idle"}>
@@ -165,6 +181,24 @@ function MergeGroup({ group, onChanged }: { group: any; onChanged: () => void })
         </InlineStack>
 
         {plan && <MergePlanView plan={plan} />}
+
+        {plan && !confirming && !execResult && (
+          <InlineStack gap="300">
+            <Button variant="primary" tone="critical" onClick={() => setConfirming(true)}>Esegui merge</Button>
+          </InlineStack>
+        )}
+        {confirming && (
+          <Banner tone="warning" title="Operazione irreversibile su prodotti live">
+            <BlockStack gap="200">
+              <Text as="p" variant="bodySm">Verranno create le varianti sul master e archiviati gli altri prodotti. Consigliato: prima su un solo gruppo.</Text>
+              <InlineStack gap="300">
+                <Button variant="primary" tone="critical" loading={execFetcher.state !== "idle"} onClick={runMerge}>Conferma ed esegui</Button>
+                <Button onClick={() => setConfirming(false)}>Annulla</Button>
+              </InlineStack>
+            </BlockStack>
+          </Banner>
+        )}
+        {execResult && <MergeResultView result={execResult} />}
       </BlockStack>
     </Card>
   );
@@ -178,16 +212,12 @@ function MergePlanView({ plan }: { plan: any }) {
         {plan.warnings?.length > 0 && (
           <Banner tone="warning">
             <BlockStack gap="100">
-              {plan.warnings.map((w: string, i: number) => (
-                <Text as="p" variant="bodySm" key={i}>{w}</Text>
-              ))}
+              {plan.warnings.map((w: string, i: number) => (<Text as="p" variant="bodySm" key={i}>{w}</Text>))}
             </BlockStack>
           </Banner>
         )}
         <Text as="p" variant="bodySm">Prodotto master: <b>{plan.masterTitle || "—"}</b></Text>
-        <Text as="p" variant="bodySm">
-          Opzioni: {plan.options?.length ? plan.options.map((o: any) => `${o.name} (${o.values.join(", ")})`).join(" · ") : "—"}
-        </Text>
+        <Text as="p" variant="bodySm">Opzioni: {plan.options?.length ? plan.options.map((o: any) => `${o.name} (${o.values.join(", ")})`).join(" · ") : "—"}</Text>
         <BlockStack gap="100">
           {plan.variants?.map((v: any) => (
             <InlineStack key={v.productId} gap="200" blockAlign="center">
@@ -199,12 +229,21 @@ function MergePlanView({ plan }: { plan: any }) {
           ))}
         </BlockStack>
         <Text as="p" tone="subdued" variant="bodySm">
-          Verranno archiviati {plan.archiveProductIds?.length || 0} prodotti (gli slave). Il mapping SKU → variante sarà salvato nel metafield danea.sku_mapping del master.
-        </Text>
-        <Text as="p" tone="subdued" variant="bodySm">
-          L'esecuzione (che applica davvero il merge) arriva nello step successivo: prima validiamo che questo piano sia corretto.
+          Verranno archiviati {plan.archiveProductIds?.length || 0} prodotti (gli slave). Mapping SKU/EAN salvato nel metafield danea.sku_mapping del master.
         </Text>
       </BlockStack>
     </Card>
+  );
+}
+
+function MergeResultView({ result }: { result: any }) {
+  return (
+    <Banner tone={result.ok ? "success" : "critical"} title={result.ok ? "Merge eseguito" : "Merge con problemi"}>
+      <BlockStack gap="100">
+        <Text as="p" variant="bodySm">Varianti create: {result.createdVariants} · Prodotti archiviati: {result.archived}</Text>
+        {(result.errors || []).map((e: string, i: number) => (<Text as="p" tone="critical" variant="bodySm" key={`e${i}`}>⛔ {e}</Text>))}
+        {(result.warnings || []).map((w: string, i: number) => (<Text as="p" tone="subdued" variant="bodySm" key={`w${i}`}>⚠️ {w}</Text>))}
+      </BlockStack>
+    </Banner>
   );
 }

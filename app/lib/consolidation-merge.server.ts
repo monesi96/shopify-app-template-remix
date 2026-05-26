@@ -1,7 +1,8 @@
 // app/lib/consolidation-merge.server.ts
-// Merge engine — Step 3-4. This file currently exposes the READ-ONLY plan
-// (dry-run). The mutating execute lands next; nothing here modifies Shopify.
+// Merge engine — Step 3-4. buildMergePlan is read-only (dry-run);
+// executeMerge performs the real Shopify mutations.
 import prisma from "../db.server";
+import type { AdminClient } from "./consolidation.server";
 
 export type PlanVariant = {
   productId: string;
@@ -28,17 +29,35 @@ export type MergePlan = {
   warnings: string[];
 };
 
+export type MergeOptions = {
+  featuredImageUrl?: string;
+  masterTitle?: string;
+  overrides?: Record<string, { size?: string; color?: string }>;
+};
+
+export type ExecuteResult = {
+  ok: boolean;
+  masterProductId: string;
+  createdVariants: number;
+  archived: number;
+  warnings: string[];
+  errors: string[];
+};
+
 const FALLBACK_SIZE = "Unica";
 const FALLBACK_COLOR = "Unico";
 
-// Build the merge plan from already-scanned candidates. Pure read (DB only):
-// no Shopify calls, so it is always safe to run.
+function clean(s?: string | null): string {
+  return (s || "").trim();
+}
+
 export async function buildMergePlan(
   shop: string,
   productIds: string[],
   masterProductId: string,
-  featuredImageUrl?: string,
+  opts: MergeOptions = {},
 ): Promise<MergePlan> {
+  const overrides = opts.overrides || {};
   const members = await prisma.consolidationCandidate.findMany({
     where: { shop, productId: { in: productIds }, status: "pending" },
     orderBy: { productTitle: "asc" },
@@ -51,20 +70,23 @@ export async function buildMergePlan(
     masterProductId = members[0].productId;
   }
 
-  const hasSize = members.some((m) => m.detectedSize);
-  const hasColor = members.some((m) => m.detectedColor);
+  const sizeOf = (m: { productId: string; detectedSize: string | null }) => clean(overrides[m.productId]?.size) || m.detectedSize || null;
+  const colorOf = (m: { productId: string; detectedColor: string | null }) => clean(overrides[m.productId]?.color) || m.detectedColor || null;
+
+  const hasSize = members.some((m) => sizeOf(m));
+  const hasColor = members.some((m) => colorOf(m));
   if (!hasSize && !hasColor) {
-    warnings.push("Nessuna taglia/colore rilevata: impossibile creare varianti distinte. Rivedi il gruppo o ignoralo.");
+    warnings.push("Nessuna taglia/colore (rilevata o inserita): impossibile creare varianti distinte.");
   }
 
   const usedCombos = new Map<string, string>();
   const variants: PlanVariant[] = members.map((m) => {
     const optionValues: { name: string; value: string }[] = [];
-    if (hasSize) optionValues.push({ name: "Taglia", value: m.detectedSize || FALLBACK_SIZE });
-    if (hasColor) optionValues.push({ name: "Colore", value: m.detectedColor || FALLBACK_COLOR });
+    if (hasSize) optionValues.push({ name: "Taglia", value: sizeOf(m) || FALLBACK_SIZE });
+    if (hasColor) optionValues.push({ name: "Colore", value: colorOf(m) || FALLBACK_COLOR });
     const combo = optionValues.map((o) => o.value).join(" / ");
     if (usedCombos.has(combo)) {
-      warnings.push(`Combinazione duplicata "${combo}": ${usedCombos.get(combo)} e ${m.sku || m.productTitle}. Una variante andrà in conflitto.`);
+      warnings.push(`Combinazione duplicata "${combo}": ${usedCombos.get(combo)} e ${m.sku || m.productTitle}. Vanno in conflitto.`);
     } else {
       usedCombos.set(combo, m.sku || m.productTitle);
     }
@@ -73,17 +95,26 @@ export async function buildMergePlan(
       sku: m.sku || "",
       barcode: m.barcode || "",
       title: m.productTitle,
-      size: m.detectedSize,
-      color: m.detectedColor,
+      size: sizeOf(m),
+      color: colorOf(m),
       optionValues,
       imageUrl: m.imageUrl || "",
       isMaster: m.productId === masterProductId,
     };
   });
 
+  // Order each option's values with the master's value first, so after
+  // productOptionsCreate (LEAVE_AS_IS) the master variant already has the
+  // correct combination and the new variants never collide with it.
+  const masterVar = variants.find((v) => v.isMaster);
+  const orderedValues = (name: string): string[] => {
+    const all = [...new Set(variants.map((v) => v.optionValues.find((o) => o.name === name)!.value))];
+    const mv = masterVar?.optionValues.find((o) => o.name === name)?.value;
+    return mv ? [mv, ...all.filter((x) => x !== mv)] : all;
+  };
   const options: { name: string; values: string[] }[] = [];
-  if (hasSize) options.push({ name: "Taglia", values: [...new Set(variants.map((v) => v.optionValues.find((o) => o.name === "Taglia")!.value))] });
-  if (hasColor) options.push({ name: "Colore", values: [...new Set(variants.map((v) => v.optionValues.find((o) => o.name === "Colore")!.value))] });
+  if (hasSize) options.push({ name: "Taglia", values: orderedValues("Taglia") });
+  if (hasColor) options.push({ name: "Colore", values: orderedValues("Colore") });
 
   const master = members.find((m) => m.productId === masterProductId);
   const skuMapping: Record<string, string> = {};
@@ -93,12 +124,168 @@ export async function buildMergePlan(
     bucketKey: members[0]?.bucketKey || "",
     vendor: master?.vendor || members[0]?.vendor || "",
     masterProductId,
-    masterTitle: master?.productTitle || "",
-    featuredImageUrl: featuredImageUrl || master?.imageUrl || "",
+    masterTitle: clean(opts.masterTitle) || master?.productTitle || "",
+    featuredImageUrl: opts.featuredImageUrl || master?.imageUrl || "",
     options,
     variants,
     archiveProductIds: members.filter((m) => m.productId !== masterProductId).map((m) => m.productId),
     skuMapping,
     warnings,
   };
+}
+
+// ── Execute (mutating) ──────────────────────────────────────────────────────
+async function gql<T = any>(admin: AdminClient, query: string, variables: Record<string, any> = {}): Promise<T> {
+  const resp = await admin.graphql(query, { variables });
+  const body: any = await resp.json();
+  if (body.errors) throw new Error(`GraphQL: ${JSON.stringify(body.errors)}`);
+  return body.data as T;
+}
+
+function pushErrors(into: string[], userErrors: any[] | undefined, label: string): boolean {
+  const errs = userErrors || [];
+  for (const e of errs) into.push(`${label}: ${e.message}${e.field ? ` (${Array.isArray(e.field) ? e.field.join(".") : e.field})` : ""}`);
+  return errs.length > 0;
+}
+
+const FRESH_QUERY = `
+  query MergeFresh($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Product {
+        id
+        title
+        variants(first: 1) { nodes { id sku barcode price inventoryQuantity inventoryItem { id } } }
+      }
+    }
+    locations(first: 1) { nodes { id } }
+  }`;
+
+export async function executeMerge(
+  admin: AdminClient,
+  shop: string,
+  productIds: string[],
+  masterProductId: string,
+  opts: MergeOptions = {},
+): Promise<ExecuteResult> {
+  const result: ExecuteResult = { ok: false, masterProductId, createdVariants: 0, archived: 0, warnings: [], errors: [] };
+  try {
+    const plan = await buildMergePlan(shop, productIds, masterProductId, opts);
+    masterProductId = plan.masterProductId;
+    result.masterProductId = masterProductId;
+
+    if (plan.variants.length < 2) { result.errors.push("Servono almeno 2 prodotti selezionati."); return result; }
+    if (plan.options.length === 0) { result.errors.push("Nessuna taglia/colore: impossibile creare varianti."); return result; }
+    const combos = new Set<string>();
+    for (const v of plan.variants) {
+      const c = v.optionValues.map((o) => o.value).join("§");
+      if (combos.has(c)) { result.errors.push(`Combinazione duplicata (${c}): risolvila prima di procedere.`); return result; }
+      combos.add(c);
+    }
+
+    const fresh = await gql(admin, FRESH_QUERY, { ids: plan.variants.map((v) => v.productId) });
+    const locationId: string | undefined = fresh.locations?.nodes?.[0]?.id;
+    if (!locationId) result.warnings.push("Nessuna location trovata: giacenze non trasferite.");
+    const byId: Record<string, any> = {};
+    for (const n of fresh.nodes || []) if (n?.id) byId[n.id] = n;
+    const masterNode = byId[masterProductId];
+    if (!masterNode) { result.errors.push("Prodotto master non trovato su Shopify."); return result; }
+    const masterVariant = masterNode.variants?.nodes?.[0];
+    const masterPlan = plan.variants.find((v) => v.isMaster);
+
+    // 1) Optional master title change
+    const newTitle = clean(opts.masterTitle);
+    if (newTitle && newTitle !== masterNode.title) {
+      const d = await gql(admin, `mutation($input: ProductInput!){ productUpdate(input:$input){ userErrors{ field message } } }`, { input: { id: masterProductId, title: newTitle } });
+      pushErrors(result.warnings, d.productUpdate?.userErrors, "titolo");
+    }
+
+    // 2) Create options (master variant keeps its current combo = master's, since values are ordered master-first)
+    const optionsInput = plan.options.map((o) => ({ name: o.name, values: o.values.map((v) => ({ name: v })) }));
+    const oc = await gql(admin, `
+      mutation($productId: ID!, $options: [OptionCreateInput!]!, $strategy: ProductOptionCreateVariantStrategy) {
+        productOptionsCreate(productId: $productId, options: $options, variantStrategy: $strategy) {
+          userErrors { field message code }
+        }
+      }`, { productId: masterProductId, options: optionsInput, strategy: "LEAVE_AS_IS" });
+    if (pushErrors(result.errors, oc.productOptionsCreate?.userErrors, "opzioni")) { result.errors.push("Creazione opzioni fallita: interrotto (nessuna variante creata, nessun prodotto archiviato)."); return result; }
+
+    // 3) Align the master's existing variant (option values + its photo) — best effort
+    if (masterVariant && masterPlan) {
+      const mu = await gql(admin, `
+        mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) { userErrors { field message } }
+        }`, {
+        productId: masterProductId,
+        variants: [{
+          id: masterVariant.id,
+          optionValues: masterPlan.optionValues.map((o) => ({ optionName: o.name, name: o.value })),
+          ...(masterPlan.imageUrl ? { mediaSrc: [masterPlan.imageUrl] } : {}),
+        }],
+      });
+      pushErrors(result.warnings, mu.productVariantsBulkUpdate?.userErrors, "variante master");
+    }
+
+    // 4) Create the slave variants (SKU + EAN + price + photo per variant)
+    const slaves = plan.variants.filter((v) => !v.isMaster);
+    const variantsInput = slaves.map((v) => ({
+      optionValues: v.optionValues.map((o) => ({ optionName: o.name, name: o.value })),
+      price: byId[v.productId]?.variants?.nodes?.[0]?.price,
+      ...(v.barcode ? { barcode: v.barcode } : {}),
+      inventoryItem: { sku: v.sku || undefined, tracked: true },
+      ...(v.imageUrl ? { mediaSrc: [v.imageUrl] } : {}),
+    }));
+    const bc = await gql(admin, `
+      mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkCreate(productId: $productId, variants: $variants) {
+          productVariants { id sku selectedOptions { name value } inventoryItem { id } }
+          userErrors { field message }
+        }
+      }`, { productId: masterProductId, variants: variantsInput });
+    if (pushErrors(result.errors, bc.productVariantsBulkCreate?.userErrors, "varianti")) { result.errors.push("Creazione varianti fallita: interrotto PRIMA dell'archiviazione (gli slave restano attivi)."); return result; }
+    const created: any[] = bc.productVariantsBulkCreate?.productVariants || [];
+    result.createdVariants = created.length;
+
+    // 5) Transfer inventory (best effort)
+    if (locationId) {
+      const quantities: any[] = [];
+      if (masterVariant?.inventoryItem?.id && masterVariant?.inventoryQuantity != null) {
+        quantities.push({ inventoryItemId: masterVariant.inventoryItem.id, locationId, quantity: masterVariant.inventoryQuantity });
+      }
+      const qtyBySku: Record<string, number> = {};
+      for (const v of slaves) { const node = byId[v.productId]?.variants?.nodes?.[0]; if (v.sku) qtyBySku[v.sku] = node?.inventoryQuantity ?? 0; }
+      for (const cv of created) { const q = qtyBySku[cv.sku]; if (cv.inventoryItem?.id && q != null) quantities.push({ inventoryItemId: cv.inventoryItem.id, locationId, quantity: q }); }
+      if (quantities.length) {
+        const inv = await gql(admin, `
+          mutation($input: InventorySetQuantitiesInput!) {
+            inventorySetQuantities(input: $input) { userErrors { field message } }
+          }`, { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities } });
+        pushErrors(result.warnings, inv.inventorySetQuantities?.userErrors, "giacenze");
+      }
+    }
+
+    // 6) Audit mapping metafield danea.sku_mapping (best effort)
+    const mapping: Record<string, any> = {};
+    if (masterPlan?.sku) mapping[masterPlan.sku] = { ean: masterPlan.barcode, options: masterPlan.optionValues.map((o) => o.value).join(" / "), variantId: masterVariant?.id || "" };
+    for (const cv of created) { const src = slaves.find((s) => s.sku === cv.sku); if (cv.sku) mapping[cv.sku] = { ean: src?.barcode || "", options: (cv.selectedOptions || []).map((o: any) => o.value).join(" / "), variantId: cv.id }; }
+    const mf = await gql(admin, `
+      mutation($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) { userErrors { field message } }
+      }`, { metafields: [{ ownerId: masterProductId, namespace: "danea", key: "sku_mapping", type: "json", value: JSON.stringify(mapping) }] });
+    pushErrors(result.warnings, mf.metafieldsSet?.userErrors, "metafield");
+
+    // 7) Archive the slave products
+    for (const pid of plan.archiveProductIds) {
+      const a = await gql(admin, `mutation($input: ProductInput!){ productUpdate(input:$input){ userErrors{ field message } } }`, { input: { id: pid, status: "ARCHIVED" } });
+      if (!pushErrors(result.errors, a.productUpdate?.userErrors, `archivio ${pid}`)) result.archived++;
+    }
+
+    // 8) Mark candidates merged
+    await prisma.consolidationCandidate.updateMany({ where: { shop, productId: { in: plan.variants.map((v) => v.productId) } }, data: { status: "merged" } });
+
+    result.ok = result.errors.length === 0;
+    return result;
+  } catch (e: any) {
+    result.errors.push(`Errore: ${e.message || String(e)}`);
+    return result;
+  }
 }
