@@ -177,6 +177,17 @@ export async function getGroups(shop: string, minSize = 2): Promise<CandidateGro
   return groups;
 }
 
+// Dismiss a false-positive group: mark its pending candidates as rejected so
+// they drop out of the dashboard. Stays rejected across re-scans (the scan
+// upsert never resets status on update).
+export async function ignoreGroup(shop: string, bucketKey: string): Promise<number> {
+  const res = await prisma.consolidationCandidate.updateMany({
+    where: { shop, bucketKey, status: "pending" },
+    data: { status: "rejected" },
+  });
+  return res.count;
+}
+
 export async function getLatestScan(shop: string) {
   return prisma.consolidationScan.findFirst({ where: { shop }, orderBy: { createdAt: "desc" } });
 }
