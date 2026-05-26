@@ -53,3 +53,41 @@ model GenerationJob {
   @@index([shop, status])
   @@index([createdAt])
 }
+
+model ConsolidationCandidate {
+  id              Int      @id @default(autoincrement())
+  shop            String
+  productId       String // GID Shopify
+  productTitle    String
+  vendor          String   @default("")
+  productType     String   @default("")
+  sku             String   @default("")
+  imageUrl        String   @default("")
+  imageHash       String   @default("") // dHash 64-bit hex
+  titleNormalized String   @default("")
+  detectedSize    String?
+  detectedColor   String?
+  bucketKey       String   @default("")
+  status          String   @default("pending") // pending | approved | rejected | merged
+  scannedAt       DateTime @default(now())
+
+  @@unique([shop, productId])
+  @@index([shop, bucketKey])
+  @@index([shop, status])
+}
+
+model ConsolidationScan {
+  id           Int       @id @default(autoincrement())
+  shop         String
+  status       String    @default("queued") // queued | running | completed | failed
+  cursor       String?
+  totalScanned Int       @default(0)
+  vendorFilter String?
+  errorLog     String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([shop, status])
+}

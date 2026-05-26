@@ -26,6 +26,7 @@ export default function App() {
         </Link>
         <Link to="/app/images">🖼️ Upscaling Immagini</Link>
         <Link to="/app/tags">Tags Manager</Link>
+        <Link to="/app/consolidation">Consolidamento Varianti</Link>
       </NavMenu>
       <Outlet />
     </AppProvider>
