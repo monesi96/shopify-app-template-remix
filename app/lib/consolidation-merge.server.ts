@@ -154,10 +154,9 @@ const FRESH_QUERY = `
       ... on Product {
         id
         title
-        variants(first: 1) { nodes { id sku barcode price inventoryQuantity inventoryItem { id } } }
+        variants(first: 1) { nodes { id sku barcode price } }
       }
     }
-    locations(first: 1) { nodes { id } }
   }`;
 
 export async function executeMerge(
@@ -183,8 +182,6 @@ export async function executeMerge(
     }
 
     const fresh = await gql(admin, FRESH_QUERY, { ids: plan.variants.map((v) => v.productId) });
-    const locationId: string | undefined = fresh.locations?.nodes?.[0]?.id;
-    if (!locationId) result.warnings.push("Nessuna location trovata: giacenze non trasferite.");
     const byId: Record<string, any> = {};
     for (const n of fresh.nodes || []) if (n?.id) byId[n.id] = n;
     const masterNode = byId[masterProductId];
@@ -231,7 +228,7 @@ export async function executeMerge(
       optionValues: v.optionValues.map((o) => ({ optionName: o.name, name: o.value })),
       price: byId[v.productId]?.variants?.nodes?.[0]?.price,
       ...(v.barcode ? { barcode: v.barcode } : {}),
-      inventoryItem: { sku: v.sku || undefined, tracked: true },
+      inventoryItem: { sku: v.sku || undefined },
       ...(v.imageUrl ? { mediaSrc: [v.imageUrl] } : {}),
     }));
     const bc = await gql(admin, `
@@ -245,22 +242,29 @@ export async function executeMerge(
     const created: any[] = bc.productVariantsBulkCreate?.productVariants || [];
     result.createdVariants = created.length;
 
-    // 5) Transfer inventory (best effort)
-    if (locationId) {
-      const quantities: any[] = [];
-      if (masterVariant?.inventoryItem?.id && masterVariant?.inventoryQuantity != null) {
-        quantities.push({ inventoryItemId: masterVariant.inventoryItem.id, locationId, quantity: masterVariant.inventoryQuantity });
+    // 5) Transfer inventory (best effort; needs read_locations/read_inventory/write_inventory)
+    try {
+      const loc = await gql(admin, `{ locations(first: 1) { nodes { id } } }`);
+      const locationId: string | undefined = loc.locations?.nodes?.[0]?.id;
+      if (!locationId) {
+        result.warnings.push("Giacenze non trasferite: nessuna location accessibile.");
+      } else {
+        const invq = await gql(admin, `query($ids: [ID!]!){ nodes(ids: $ids){ ... on Product { id variants(first: 1){ nodes { sku inventoryQuantity inventoryItem { id } } } } } }`, { ids: plan.variants.map((v) => v.productId) });
+        const invById: Record<string, any> = {};
+        for (const n of invq.nodes || []) if (n?.id) invById[n.id] = n?.variants?.nodes?.[0];
+        const quantities: any[] = [];
+        const masterInv = invById[masterProductId];
+        if (masterInv?.inventoryItem?.id && masterInv?.inventoryQuantity != null) quantities.push({ inventoryItemId: masterInv.inventoryItem.id, locationId, quantity: masterInv.inventoryQuantity });
+        const qtyBySku: Record<string, number> = {};
+        for (const v of slaves) { if (v.sku) qtyBySku[v.sku] = invById[v.productId]?.inventoryQuantity ?? 0; }
+        for (const cv of created) { const q = qtyBySku[cv.sku]; if (cv.inventoryItem?.id && q != null) quantities.push({ inventoryItemId: cv.inventoryItem.id, locationId, quantity: q }); }
+        if (quantities.length) {
+          const inv = await gql(admin, `mutation($input: InventorySetQuantitiesInput!){ inventorySetQuantities(input: $input){ userErrors { field message } } }`, { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities } });
+          pushErrors(result.warnings, inv.inventorySetQuantities?.userErrors, "giacenze");
+        }
       }
-      const qtyBySku: Record<string, number> = {};
-      for (const v of slaves) { const node = byId[v.productId]?.variants?.nodes?.[0]; if (v.sku) qtyBySku[v.sku] = node?.inventoryQuantity ?? 0; }
-      for (const cv of created) { const q = qtyBySku[cv.sku]; if (cv.inventoryItem?.id && q != null) quantities.push({ inventoryItemId: cv.inventoryItem.id, locationId, quantity: q }); }
-      if (quantities.length) {
-        const inv = await gql(admin, `
-          mutation($input: InventorySetQuantitiesInput!) {
-            inventorySetQuantities(input: $input) { userErrors { field message } }
-          }`, { input: { name: "available", reason: "correction", ignoreCompareQuantity: true, quantities } });
-        pushErrors(result.warnings, inv.inventorySetQuantities?.userErrors, "giacenze");
-      }
+    } catch (e: any) {
+      result.warnings.push(`Giacenze non trasferite (${e.message}). Per abilitarle aggiungi all'app gli scope read_locations, read_inventory, write_inventory e ri-autorizza.`);
     }
 
     // 6) Audit mapping metafield danea.sku_mapping (best effort)
