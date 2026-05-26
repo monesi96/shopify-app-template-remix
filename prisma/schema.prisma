@@ -62,6 +62,7 @@ model ConsolidationCandidate {
   vendor          String   @default("")
   productType     String   @default("")
   sku             String   @default("")
+  barcode         String   @default("") // EAN/GTIN della variante
   imageUrl        String   @default("")
   imageHash       String   @default("") // dHash 64-bit hex
   titleNormalized String   @default("")

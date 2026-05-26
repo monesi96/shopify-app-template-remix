@@ -148,8 +148,8 @@ export async function processScanBatch(admin: AdminClient, scanId: number, maxRu
       const key = bucketKey(n.vendor || "", titleNorm);
       await prisma.consolidationCandidate.upsert({
         where: { shop_productId: { shop, productId: n.id } },
-        create: { shop, productId: n.id, productTitle: n.title || "", vendor: n.vendor || "", productType: n.productType || "", sku: v0.sku || "", imageUrl, imageHash, titleNormalized: titleNorm, detectedSize: detectSize(n.title || ""), detectedColor: detectColor(n.title || ""), bucketKey: key, status: "pending" },
-        update: { productTitle: n.title || "", vendor: n.vendor || "", productType: n.productType || "", sku: v0.sku || "", imageUrl, imageHash, titleNormalized: titleNorm, detectedSize: detectSize(n.title || ""), detectedColor: detectColor(n.title || ""), bucketKey: key, scannedAt: new Date() },
+        create: { shop, productId: n.id, productTitle: n.title || "", vendor: n.vendor || "", productType: n.productType || "", sku: v0.sku || "", barcode: v0.barcode || "", imageUrl, imageHash, titleNormalized: titleNorm, detectedSize: detectSize(n.title || ""), detectedColor: detectColor(n.title || ""), bucketKey: key, status: "pending" },
+        update: { productTitle: n.title || "", vendor: n.vendor || "", productType: n.productType || "", sku: v0.sku || "", barcode: v0.barcode || "", imageUrl, imageHash, titleNormalized: titleNorm, detectedSize: detectSize(n.title || ""), detectedColor: detectColor(n.title || ""), bucketKey: key, scannedAt: new Date() },
       });
       scannedThisRun++;
       cursor = edge.cursor; // checkpoint a livello di singolo prodotto: il progresso non si perde mai

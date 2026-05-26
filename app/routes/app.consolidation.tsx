@@ -146,7 +146,7 @@ function MergeGroup({ group, onChanged }: { group: any; onChanged: () => void })
                 <BlockStack gap="050">
                   <Text as="span" variant="bodyMd">{m.productTitle}</Text>
                   <Text as="span" tone="subdued" variant="bodySm">
-                    SKU {m.sku || "—"}{attrs ? ` · ${attrs}` : " · nessun attributo rilevato"}
+                    SKU {m.sku || "—"}{m.barcode ? ` · EAN ${m.barcode}` : ""}{attrs ? ` · ${attrs}` : " · nessun attributo rilevato"}
                   </Text>
                   <InlineStack gap="400">
                     <RadioButton label="Master" checked={masterId === m.productId} disabled={!isSel} name={`master-${group.bucketKey}`} onChange={() => setMasterId(m.productId)} />
@@ -193,7 +193,7 @@ function MergePlanView({ plan }: { plan: any }) {
             <InlineStack key={v.productId} gap="200" blockAlign="center">
               <Thumbnail source={v.imageUrl || ""} alt={v.title} size="extraSmall" />
               <Text as="span" variant="bodySm">
-                {v.optionValues.map((o: any) => o.value).join(" / ") || "—"} · SKU {v.sku || "—"}{v.isMaster ? " · master" : ""}
+                {v.optionValues.map((o: any) => o.value).join(" / ") || "—"} · SKU {v.sku || "—"}{v.barcode ? ` · EAN ${v.barcode}` : ""}{v.isMaster ? " · master" : ""}
               </Text>
             </InlineStack>
           ))}
