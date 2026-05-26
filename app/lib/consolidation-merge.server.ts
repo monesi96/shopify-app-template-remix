@@ -34,12 +34,12 @@ const FALLBACK_COLOR = "Unico";
 // no Shopify calls, so it is always safe to run.
 export async function buildMergePlan(
   shop: string,
-  bucketKey: string,
+  productIds: string[],
   masterProductId: string,
   featuredImageUrl?: string,
 ): Promise<MergePlan> {
   const members = await prisma.consolidationCandidate.findMany({
-    where: { shop, bucketKey, status: "pending" },
+    where: { shop, productId: { in: productIds }, status: "pending" },
     orderBy: { productTitle: "asc" },
   });
 
@@ -88,7 +88,7 @@ export async function buildMergePlan(
   for (const v of variants) if (v.sku) skuMapping[v.sku] = v.optionValues.map((o) => o.value).join(" / ");
 
   return {
-    bucketKey,
+    bucketKey: members[0]?.bucketKey || "",
     vendor: master?.vendor || members[0]?.vendor || "",
     masterProductId,
     masterTitle: master?.productTitle || "",
