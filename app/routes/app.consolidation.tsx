@@ -32,7 +32,7 @@ export default function Consolidation() {
     const r = procFetcher.data?.results?.[0];
     if (r && r.done === false) {
       procFetcher.submit({ scanId: r.scanId }, { method: "post", action: "/api/consolidation/process", encType: "application/json" });
-    } else if (r && r.done === true) {
+    } else if (r && (r.done === true || r.error)) {
       revalidator.revalidate();
     }
   }, [procFetcher.data]);
@@ -44,7 +44,7 @@ export default function Consolidation() {
       <BlockStack gap="400">
         <Card>
           <BlockStack gap="300">
-            <TextField label="Filtra per vendor (opzionale, es. Havaianas)" value={vendor} onChange={setVendor} autoComplete="off" />
+            <TextField label="Filtra per vendor (opzionale, es. Havaianas)" helpText="La scansione considera solo i prodotti ATTIVI." value={vendor} onChange={setVendor} autoComplete="off" />
             <InlineStack gap="300" align="start">
               <Button variant="primary" loading={scanFetcher.state !== "idle" || procFetcher.state !== "idle" || running} onClick={startScan}>
                 Avvia scansione
@@ -57,6 +57,11 @@ export default function Consolidation() {
             </InlineStack>
           </BlockStack>
         </Card>
+        {scan?.status === "failed" && (
+          <Banner tone="critical" title="La scansione è fallita">
+            <Text as="p" variant="bodySm">{scan.errorLog || "Errore sconosciuto (nessun dettaglio salvato)."}</Text>
+          </Banner>
+        )}
         {groups.length === 0 && !running && (
           <Banner tone="info">Nessun gruppo trovato. Avvia una scansione per popolare i candidati.</Banner>
         )}

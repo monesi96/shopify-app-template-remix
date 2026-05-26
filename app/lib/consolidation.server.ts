@@ -3,26 +3,27 @@
 import sharp from "sharp";
 import prisma from "../db.server";
 
-const ADMIN_API_VERSION = "2024-10";
-const PRODUCTS_PER_PAGE = 50;
+// Session-based Admin GraphQL client (the object returned by
+// authenticate.admin(request).admin). We use this instead of a raw env-token
+// fetch so the scan authenticates exactly like the rest of the app and does
+// not depend on SHOPIFY_ACCESS_TOKEN being present in the environment.
+export type AdminClient = {
+  graphql: (query: string, options?: { variables?: Record<string, any> }) => Promise<Response>;
+};
 
-export async function adminGraphQL<T = any>(shop: string, query: string, variables: Record<string, any> = {}): Promise<T> {
-  const token = process.env.SHOPIFY_ACCESS_TOKEN;
-  if (!token) throw new Error("SHOPIFY_ACCESS_TOKEN env var not set");
-  const resp = await fetch(`https://${shop}/admin/api/${ADMIN_API_VERSION}/graphql.json`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!resp.ok) throw new Error(`Admin GraphQL HTTP ${resp.status}`);
-  const data: any = await resp.json();
-  if (data.errors) throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
-  return data.data as T;
+const PRODUCTS_PER_PAGE = 25;
+
+async function adminQuery<T = any>(admin: AdminClient, query: string, variables: Record<string, any> = {}): Promise<T> {
+  const resp = await admin.graphql(query, { variables });
+  const body: any = await resp.json();
+  if (body.errors) throw new Error(`GraphQL errors: ${JSON.stringify(body.errors)}`);
+  if (!body.data) throw new Error("Admin GraphQL returned no data");
+  return body.data as T;
 }
 
 // ── dHash 64-bit via sharp (robusto a 1 o 3 canali) ──
 export async function computeImageHash(imageUrl: string): Promise<string> {
-  const resp = await fetch(imageUrl);
+  const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(5000) });
   if (!resp.ok) throw new Error(`image fetch ${resp.status}`);
   const inputBuf = Buffer.from(await resp.arrayBuffer());
   const W = 9, H = 8;
@@ -100,7 +101,7 @@ export async function createScan(shop: string, vendorFilter?: string): Promise<n
   return scan.id;
 }
 
-export async function processScanBatch(scanId: number, maxRuntimeMs = 4 * 60 * 1000): Promise<{ done: boolean; scanned: number }> {
+export async function processScanBatch(admin: AdminClient, scanId: number, maxRuntimeMs = 50 * 1000): Promise<{ done: boolean; scanned: number }> {
   const start = Date.now();
   const scan = await prisma.consolidationScan.findUnique({ where: { id: scanId } });
   if (!scan) throw new Error(`scan ${scanId} not found`);
@@ -108,7 +109,7 @@ export async function processScanBatch(scanId: number, maxRuntimeMs = 4 * 60 * 1
   if (scan.status === "queued") await prisma.consolidationScan.update({ where: { id: scanId }, data: { status: "running", startedAt: new Date() } });
   const shop = scan.shop;
   const qParts = ["status:active"];
-  if (scan.vendorFilter) qParts.push(`vendor:'${scan.vendorFilter.replace(/'/g, "")}'`);
+  if (scan.vendorFilter) qParts.push(`vendor:"${scan.vendorFilter.replace(/"/g, "")}"`);
   const queryStr = qParts.join(" ");
   const PRODUCTS_QUERY = `
     query($cursor: String, $q: String!) {
@@ -129,7 +130,7 @@ export async function processScanBatch(scanId: number, maxRuntimeMs = 4 * 60 * 1
       await prisma.consolidationScan.update({ where: { id: scanId }, data: { cursor, totalScanned: scan.totalScanned + scannedThisRun } });
       return { done: false, scanned: scannedThisRun };
     }
-    const data: any = await adminGraphQL(shop, PRODUCTS_QUERY, { cursor, q: queryStr });
+    const data: any = await adminQuery(admin, PRODUCTS_QUERY, { cursor, q: queryStr });
     const conn = data.products;
     for (const edge of conn.edges || []) {
       const n = edge.node;
