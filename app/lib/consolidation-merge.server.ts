@@ -196,6 +196,8 @@ export async function executeMerge(
     const fresh = await gql(admin, FRESH_QUERY, { ids: plan.variants.map((v) => v.productId) });
     const byId: Record<string, any> = {};
     for (const n of fresh.nodes || []) if (n?.id) byId[n.id] = n;
+    // Read the EAN live from Shopify (not the possibly-stale scan data).
+    const freshBarcode = (pid: string): string => byId[pid]?.variants?.nodes?.[0]?.barcode || "";
     const masterNode = byId[masterProductId];
     if (!masterNode) { result.errors.push("Prodotto master non trovato su Shopify."); return result; }
     const masterVariant = masterNode.variants?.nodes?.[0];
@@ -241,7 +243,7 @@ export async function executeMerge(
     const variantsInput = slaves.map((v) => ({
       optionValues: v.optionValues.map((o) => ({ optionName: o.name, name: o.value })),
       price: byId[v.productId]?.variants?.nodes?.[0]?.price,
-      ...(v.barcode ? { barcode: v.barcode } : {}),
+      ...(freshBarcode(v.productId) ? { barcode: freshBarcode(v.productId) } : {}),
       inventoryItem: { sku: v.sku || undefined },
     }));
     const bc = await gql(admin, `
@@ -260,7 +262,8 @@ export async function executeMerge(
     const barcodeUpdates: { id: string; barcode: string }[] = [];
     for (const cv of created) {
       const src = slaves.find((s) => s.sku === cv.sku);
-      if (cv.id && src?.barcode) barcodeUpdates.push({ id: cv.id, barcode: src.barcode });
+      const ean = src ? freshBarcode(src.productId) : "";
+      if (cv.id && ean) barcodeUpdates.push({ id: cv.id, barcode: ean });
     }
     if (barcodeUpdates.length) {
       const bu = await gql(admin, `mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!){ productVariantsBulkUpdate(productId: $productId, variants: $variants){ userErrors { field message } } }`, { productId: masterProductId, variants: barcodeUpdates });
@@ -334,8 +337,8 @@ export async function executeMerge(
 
     // 6) Audit mapping metafield danea.sku_mapping (best effort)
     const mapping: Record<string, any> = {};
-    if (masterPlan?.sku) mapping[masterPlan.sku] = { ean: masterPlan.barcode, options: masterPlan.optionValues.map((o) => o.value).join(" / "), variantId: masterVariant?.id || "" };
-    for (const cv of created) { const src = slaves.find((s) => s.sku === cv.sku); if (cv.sku) mapping[cv.sku] = { ean: src?.barcode || "", options: (cv.selectedOptions || []).map((o: any) => o.value).join(" / "), variantId: cv.id }; }
+    if (masterPlan?.sku) mapping[masterPlan.sku] = { ean: freshBarcode(masterProductId), options: masterPlan.optionValues.map((o) => o.value).join(" / "), variantId: masterVariant?.id || "" };
+    for (const cv of created) { const src = slaves.find((s) => s.sku === cv.sku); if (cv.sku) mapping[cv.sku] = { ean: src ? freshBarcode(src.productId) : "", options: (cv.selectedOptions || []).map((o: any) => o.value).join(" / "), variantId: cv.id }; }
     const mf = await gql(admin, `
       mutation($metafields: [MetafieldsSetInput!]!) {
         metafieldsSet(metafields: $metafields) { userErrors { field message } }
