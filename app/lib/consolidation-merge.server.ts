@@ -82,8 +82,8 @@ export async function buildMergePlan(
   const usedCombos = new Map<string, string>();
   const variants: PlanVariant[] = members.map((m) => {
     const optionValues: { name: string; value: string }[] = [];
-    if (hasSize) optionValues.push({ name: "Taglia", value: sizeOf(m) || FALLBACK_SIZE });
     if (hasColor) optionValues.push({ name: "Colore", value: colorOf(m) || FALLBACK_COLOR });
+    if (hasSize) optionValues.push({ name: "Taglia", value: sizeOf(m) || FALLBACK_SIZE });
     const combo = optionValues.map((o) => o.value).join(" / ");
     if (usedCombos.has(combo)) {
       warnings.push(`Combinazione duplicata "${combo}": ${usedCombos.get(combo)} e ${m.sku || m.productTitle}. Vanno in conflitto.`);
@@ -113,8 +113,8 @@ export async function buildMergePlan(
     return mv ? [mv, ...all.filter((x) => x !== mv)] : all;
   };
   const options: { name: string; values: string[] }[] = [];
-  if (hasSize) options.push({ name: "Taglia", values: orderedValues("Taglia") });
   if (hasColor) options.push({ name: "Colore", values: orderedValues("Colore") });
+  if (hasSize) options.push({ name: "Taglia", values: orderedValues("Taglia") });
 
   const master = members.find((m) => m.productId === masterProductId);
   const skuMapping: Record<string, string> = {};
@@ -243,7 +243,6 @@ export async function executeMerge(
       price: byId[v.productId]?.variants?.nodes?.[0]?.price,
       ...(v.barcode ? { barcode: v.barcode } : {}),
       inventoryItem: { sku: v.sku || undefined },
-      ...(imagesVary && v.imageUrl ? { mediaSrc: [v.imageUrl] } : {}),
     }));
     const bc = await gql(admin, `
       mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
@@ -255,6 +254,49 @@ export async function executeMerge(
     if (pushErrors(result.errors, bc.productVariantsBulkCreate?.userErrors, "varianti")) { result.errors.push("Creazione varianti fallita: interrotto PRIMA dell'archiviazione (gli slave restano attivi)."); return result; }
     const created: any[] = bc.productVariantsBulkCreate?.productVariants || [];
     result.createdVariants = created.length;
+
+    // 4b) Attach a per-variant image when images differ: create the media on the
+    // product, wait until READY, then link each variant to its media id.
+    if (imagesVary) {
+      try {
+        const wanted: { variantId: string; url: string }[] = [];
+        if (masterVariant?.id && masterPlan?.imageUrl) wanted.push({ variantId: masterVariant.id, url: masterPlan.imageUrl });
+        for (const cv of created) { const src = slaves.find((s) => s.sku === cv.sku); if (cv.id && src?.imageUrl) wanted.push({ variantId: cv.id, url: src.imageUrl }); }
+
+        const med = await gql(admin, `query($id: ID!){ product(id: $id){ media(first: 100){ nodes { id status ... on MediaImage { image { url } } } } } }`, { id: masterProductId });
+        const urlToMediaId = new Map<string, string>();
+        for (const n of med.product?.media?.nodes || []) { if (n?.image?.url && n?.id) urlToMediaId.set(n.image.url, n.id); }
+
+        const distinctUrls = [...new Set(wanted.map((w) => w.url))];
+        const missing = distinctUrls.filter((u) => !urlToMediaId.has(u));
+        const newIds: string[] = [];
+        if (missing.length) {
+          const cm = await gql(admin, `mutation($productId: ID!, $media: [CreateMediaInput!]!){ productCreateMedia(productId: $productId, media: $media){ media { id } mediaUserErrors { field message } } }`, { productId: masterProductId, media: missing.map((u) => ({ originalSource: u, mediaContentType: "IMAGE" })) });
+          pushErrors(result.warnings, cm.productCreateMedia?.mediaUserErrors, "media");
+          const cmedia = cm.productCreateMedia?.media || [];
+          missing.forEach((u, i) => { const id = cmedia[i]?.id; if (id) { urlToMediaId.set(u, id); newIds.push(id); } });
+        }
+
+        // Wait for new media to be READY (Shopify rejects attaching non-ready media)
+        if (newIds.length) {
+          for (let attempt = 0; attempt < 8; attempt++) {
+            const st = await gql(admin, `query($ids: [ID!]!){ nodes(ids: $ids){ ... on MediaImage { id status } } }`, { ids: newIds });
+            if ((st.nodes || []).every((n: any) => !n || n.status === "READY" || n.status === "FAILED")) break;
+            await new Promise((r) => setTimeout(r, 1500));
+          }
+        }
+
+        const variantMedia = wanted
+          .map((w) => ({ variantId: w.variantId, mediaIds: urlToMediaId.has(w.url) ? [urlToMediaId.get(w.url) as string] : [] }))
+          .filter((vm) => vm.mediaIds.length);
+        if (variantMedia.length) {
+          const am = await gql(admin, `mutation($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!){ productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia){ userErrors { field message } } }`, { productId: masterProductId, variantMedia });
+          pushErrors(result.warnings, am.productVariantAppendMedia?.userErrors, "immagini varianti");
+        }
+      } catch (e: any) {
+        result.warnings.push(`Immagini varianti non applicate (${e.message}).`);
+      }
+    }
 
     // 5) Trasferisce le giacenze per variante (location già verificata sopra)
     let inventoryTransferred = false;
