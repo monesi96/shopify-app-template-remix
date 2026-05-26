@@ -17,6 +17,7 @@ export default function Consolidation() {
   const scanFetcher = useFetcher<{ scanId: number }>();
   const procFetcher = useFetcher<any>();
   const ignoreFetcher = useFetcher<{ ok?: boolean }>();
+  const cancelFetcher = useFetcher<{ ok?: boolean }>();
   const revalidator = useRevalidator();
   const [vendor, setVendor] = useState("");
   const running = scan?.status === "queued" || scan?.status === "running";
@@ -43,7 +44,14 @@ export default function Consolidation() {
     if (ignoreFetcher.data?.ok) revalidator.revalidate();
   }, [ignoreFetcher.data]);
 
+  // Dopo aver fermato la scansione, ricarica lo stato
+  useEffect(() => {
+    if (cancelFetcher.data?.ok) revalidator.revalidate();
+  }, [cancelFetcher.data]);
+
   const startScan = () => scanFetcher.submit({ vendor }, { method: "post", action: "/api/consolidation/scan" });
+  const resumeScan = () => scan && procFetcher.submit({ scanId: scan.id }, { method: "post", action: "/api/consolidation/process", encType: "application/json" });
+  const stopScan = () => scan && cancelFetcher.submit({ scanId: scan.id }, { method: "post", action: "/api/consolidation/cancel", encType: "application/json" });
 
   return (
     <Page title="Consolidamento Varianti" subtitle="Trova prodotti separati che sono in realtà varianti dello stesso prodotto">
@@ -52,9 +60,15 @@ export default function Consolidation() {
           <BlockStack gap="300">
             <TextField label="Filtra per vendor (opzionale, es. Havaianas)" helpText="La scansione considera solo i prodotti ATTIVI." value={vendor} onChange={setVendor} autoComplete="off" />
             <InlineStack gap="300" align="start">
-              <Button variant="primary" loading={scanFetcher.state !== "idle" || procFetcher.state !== "idle" || running} onClick={startScan}>
+              <Button variant="primary" disabled={running} loading={scanFetcher.state !== "idle"} onClick={startScan}>
                 Avvia scansione
               </Button>
+              {running && (
+                <>
+                  <Button onClick={resumeScan} loading={procFetcher.state !== "idle"}>Riprendi</Button>
+                  <Button tone="critical" onClick={stopScan} loading={cancelFetcher.state !== "idle"}>Ferma scansione</Button>
+                </>
+              )}
               {scan && (
                 <Text as="span" tone="subdued">
                   Ultima scansione: {scan.status} · {scan.totalScanned} prodotti
